@@ -15,6 +15,21 @@ from kfp_workflow.pipeline.compiler import compile_pipeline
 from kfp_workflow.specs import PipelineSpec
 
 
+def _inject_user_header(client: Client, user: str) -> None:
+    """Set the ``kubeflow-userid`` header on all internal KFP API clients.
+
+    When accessing the ml-pipeline service via port-forward (bypassing
+    Istio auth), the identity header must be injected manually.
+    """
+    for attr in (
+        "_experiment_api", "_run_api", "_pipelines_api",
+        "_upload_api", "_recurring_run_api", "_healthz_api",
+    ):
+        api = getattr(client, attr, None)
+        if api is not None and hasattr(api, "api_client"):
+            api.api_client.default_headers["kubeflow-userid"] = user
+
+
 def _wait_port(host: str, port: int, timeout: float = 15.0) -> None:
     """Poll a TCP socket until it accepts connections."""
     started = time.time()
@@ -90,6 +105,9 @@ def submit_pipeline(
             cookies=cookies or None,
             namespace=namespace,
         )
+
+        # Inject kubeflow-userid header for port-forward auth bypass
+        _inject_user_header(client, "user@example.com")
 
         # 4. Create experiment (idempotent) and submit run
         try:

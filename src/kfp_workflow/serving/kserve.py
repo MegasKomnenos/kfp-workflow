@@ -30,6 +30,11 @@ def build_inference_service_manifest(
         "metadata": {
             "name": name,
             "namespace": namespace,
+            "annotations": {
+                # Use RawDeployment mode to support PVC mounts
+                # (Knative serverless mode does not allow PVCs)
+                "serving.kserve.io/deploymentMode": "RawDeployment",
+            },
         },
         "spec": {
             "predictor": {

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from kfp import compiler, dsl
-from kfp.kubernetes import mount_pvc
+from kfp.kubernetes import mount_pvc, set_image_pull_policy
 
 from kfp_workflow.components import (
     evaluate_component,
@@ -29,6 +29,9 @@ def _configure_task(task: dsl.PipelineTask, spec: PipelineSpec) -> dsl.PipelineT
     )
     if spec.runtime.use_gpu:
         task = task.set_gpu_limit(res.gpu_limit)
+
+    # Set image pull policy
+    set_image_pull_policy(task, spec.runtime.image_pull_policy)
 
     # Mount data PVC (read-only for all steps)
     mount_pvc(

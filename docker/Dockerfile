@@ -12,8 +12,11 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git curl \
  && rm -rf /var/lib/apt/lists/*
 
+# Pin transformers to avoid mamba_ssm import incompatibility
+# (mamba_ssm 2.2.2 imports GreedySearchDecoderOnlyOutput removed in transformers>=4.45)
 # Install mamba_ssm from pre-built wheel (CPU fallback via selective_scan_ref)
 RUN pip install --upgrade pip setuptools wheel ninja packaging \
+ && pip install "transformers>=4.40,<4.45" \
  && pip install "${MAMBA_WHEEL_URL}"
 
 # Install kfp-workflow
