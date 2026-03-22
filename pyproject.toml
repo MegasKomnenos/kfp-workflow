@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kfp-workflow"
+version = "0.1.0"
+description = "KFP v2 training pipeline and KServe serving workflow manager"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = [
+    "kfp[kubernetes]==2.15.0",
+    "kubernetes>=29,<31",
+    "pydantic>=2.7,<3",
+    "PyYAML>=6,<7",
+    "typer>=0.12,<1",
+    "torch>=2.4,<2.6",
+    "requests>=2.31,<3",
+]
+
+[project.optional-dependencies]
+serving = [
+    "kserve>=0.13,<1",
+]
+dev = [
+    "pytest>=8,<9",
+]
+
+[project.scripts]
+kfp-workflow = "kfp_workflow.cli.main:app"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

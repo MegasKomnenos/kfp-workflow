@@ -1,0 +1,46 @@
+metadata:
+  name: sample-train-pipeline
+  description: Sample training pipeline for scaffolding validation
+  version: v1
+
+runtime:
+  namespace: kubeflow-user-example-com
+  pipeline_root: ""
+  image: kfp-workflow:latest
+  image_pull_policy: IfNotPresent
+  service_account: default-editor
+  use_gpu: false
+  torch_num_threads: 2
+  resources:
+    cpu_request: "2"
+    cpu_limit: "2"
+    memory_request: 8Gi
+    memory_limit: 8Gi
+    gpu_request: "0"
+    gpu_limit: "0"
+
+storage:
+  data_pvc: dataset-store
+  model_pvc: model-store
+  storage_class: local-path
+  data_size: 32Gi
+  model_size: 32Gi
+  data_mount_path: /mnt/data
+  model_mount_path: /mnt/models
+
+model:
+  name: sample-pytorch-model
+  version: v1
+
+dataset:
+  name: sample-dataset
+  version: v1
+
+train:
+  seed: 42
+  batch_size: 64
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  max_epochs: 50
+  patience: 8
+  val_split: 0.2
