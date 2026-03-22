@@ -1,4 +1,4 @@
-"""KFP component: evaluate trained model on validation/test set."""
+"""KFP component: evaluate trained model via model plugin."""
 
 from kfp import dsl
 
@@ -11,7 +11,7 @@ def evaluate_component(
     train_result_json: str,
     preprocess_result_json: str,
 ) -> str:
-    """Evaluate model on validation/test set and compute metrics.
+    """Evaluate model on test set and compute metrics via model plugin.
 
     Parameters
     ----------
@@ -25,7 +25,24 @@ def evaluate_component(
     Returns
     -------
     str
-        JSON: ``{"metrics": {"loss": float, "accuracy": float, ...},
-        "model_path": str}``
+        JSON with evaluation metrics and model path.
     """
-    raise NotImplementedError("evaluate_component not yet implemented")
+    import json
+    from kfp_workflow.plugins import get_plugin
+    from kfp_workflow.plugins.base import (
+        PreprocessResult,
+        TrainResult,
+        result_to_dict,
+    )
+
+    spec = json.loads(spec_json)
+    train_result = TrainResult(**json.loads(train_result_json))
+    preprocess_result = PreprocessResult(**json.loads(preprocess_result_json))
+
+    plugin = get_plugin(spec["model"]["name"])
+    result = plugin.evaluate(
+        spec=spec,
+        train_result=train_result,
+        preprocess_result=preprocess_result,
+    )
+    return json.dumps(result_to_dict(result))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -124,6 +125,8 @@ def cmd_serve_create(
         model_pvc_name=loaded.model_pvc,
         model_subpath=loaded.model_subpath,
         runtime=loaded.runtime,
+        predictor_image=loaded.predictor_image,
+        model_name=loaded.model_name,
         replicas=loaded.replicas,
         resources=loaded.resources.model_dump(),
         dry_run=dry_run,
@@ -156,11 +159,14 @@ def cmd_model_register(
     uri: str = typer.Option(..., help="Model artifact URI (PVC subpath)."),
     framework: str = typer.Option("pytorch", help="ML framework."),
     description: str = typer.Option("", help="Model description."),
+    registry_path: str = typer.Option(
+        "/mnt/models/.model_registry.json", help="Path to registry JSON file."
+    ),
 ) -> None:
-    """Register a model in the Kubeflow Model Registry."""
-    from kfp_workflow.registry.model_registry import KubeflowModelRegistry
+    """Register a model in the file-backed model registry."""
+    from kfp_workflow.registry.model_registry import FileModelRegistry
 
-    registry = KubeflowModelRegistry()
+    registry = FileModelRegistry(registry_path=registry_path)
     info = registry.register_model(
         name=name,
         version=version,
@@ -175,21 +181,28 @@ def cmd_model_register(
 def cmd_model_get(
     name: str = typer.Option(..., help="Model name."),
     version: Optional[str] = typer.Option(None, help="Model version."),
+    registry_path: str = typer.Option(
+        "/mnt/models/.model_registry.json", help="Path to registry JSON file."
+    ),
 ) -> None:
-    """Retrieve a model from the Kubeflow Model Registry."""
-    from kfp_workflow.registry.model_registry import KubeflowModelRegistry
+    """Retrieve a model from the file-backed model registry."""
+    from kfp_workflow.registry.model_registry import FileModelRegistry
 
-    registry = KubeflowModelRegistry()
+    registry = FileModelRegistry(registry_path=registry_path)
     info = registry.get_model(name=name, version=version)
     typer.echo(json.dumps(info.model_dump(), indent=2))
 
 
 @model_reg_app.command("list")
-def cmd_model_list() -> None:
-    """List all models in the Kubeflow Model Registry."""
-    from kfp_workflow.registry.model_registry import KubeflowModelRegistry
+def cmd_model_list(
+    registry_path: str = typer.Option(
+        "/mnt/models/.model_registry.json", help="Path to registry JSON file."
+    ),
+) -> None:
+    """List all models in the file-backed model registry."""
+    from kfp_workflow.registry.model_registry import FileModelRegistry
 
-    registry = KubeflowModelRegistry()
+    registry = FileModelRegistry(registry_path=registry_path)
     models = registry.list_models()
     for m in models:
         typer.echo(f"{m.name} v{m.version} ({m.framework})")
@@ -206,11 +219,14 @@ def cmd_dataset_register(
     subpath: str = typer.Option(..., help="Path within the PVC."),
     version: str = typer.Option("v1", help="Dataset version."),
     description: str = typer.Option("", help="Dataset description."),
+    registry_path: str = typer.Option(
+        "/mnt/data/.dataset_registry.json", help="Path to registry JSON file."
+    ),
 ) -> None:
     """Register a dataset in the PVC dataset registry."""
     from kfp_workflow.registry.dataset_registry import PVCDatasetRegistry
 
-    registry = PVCDatasetRegistry()
+    registry = PVCDatasetRegistry(registry_path=registry_path)
     info = registry.register_dataset(
         name=name,
         pvc_name=pvc_name,
@@ -225,21 +241,28 @@ def cmd_dataset_register(
 def cmd_dataset_get(
     name: str = typer.Option(..., help="Dataset name."),
     version: Optional[str] = typer.Option(None, help="Dataset version."),
+    registry_path: str = typer.Option(
+        "/mnt/data/.dataset_registry.json", help="Path to registry JSON file."
+    ),
 ) -> None:
     """Retrieve a dataset from the PVC dataset registry."""
     from kfp_workflow.registry.dataset_registry import PVCDatasetRegistry
 
-    registry = PVCDatasetRegistry()
+    registry = PVCDatasetRegistry(registry_path=registry_path)
     info = registry.get_dataset(name=name, version=version)
     typer.echo(json.dumps(info.model_dump(), indent=2))
 
 
 @dataset_reg_app.command("list")
-def cmd_dataset_list() -> None:
+def cmd_dataset_list(
+    registry_path: str = typer.Option(
+        "/mnt/data/.dataset_registry.json", help="Path to registry JSON file."
+    ),
+) -> None:
     """List all datasets in the PVC dataset registry."""
     from kfp_workflow.registry.dataset_registry import PVCDatasetRegistry
 
-    registry = PVCDatasetRegistry()
+    registry = PVCDatasetRegistry(registry_path=registry_path)
     datasets = registry.list_datasets()
     for d in datasets:
         typer.echo(f"{d.name} v{d.version} @ {d.pvc_name}:{d.subpath}")
@@ -248,6 +271,11 @@ def cmd_dataset_list() -> None:
 # ---------------------------------------------------------------------------
 # cluster commands
 # ---------------------------------------------------------------------------
+
+def _run_kubectl(args: list[str], *, input_text: str | None = None) -> None:
+    """Run a kubectl command, raising on failure."""
+    subprocess.run(args, check=True, text=True, input=input_text)
+
 
 @cluster_app.command("bootstrap")
 def cmd_cluster_bootstrap(
@@ -259,13 +287,14 @@ def cmd_cluster_bootstrap(
 
     loaded = load_pipeline_spec(spec)
     storage = loaded.storage
+    namespace = loaded.runtime.namespace
 
     data_pvc = {
         "apiVersion": "v1",
         "kind": "PersistentVolumeClaim",
         "metadata": {
             "name": storage.data_pvc,
-            "namespace": loaded.runtime.namespace,
+            "namespace": namespace,
         },
         "spec": {
             "accessModes": ["ReadWriteOnce"],
@@ -278,7 +307,7 @@ def cmd_cluster_bootstrap(
         "kind": "PersistentVolumeClaim",
         "metadata": {
             "name": storage.model_pvc,
-            "namespace": loaded.runtime.namespace,
+            "namespace": namespace,
         },
         "spec": {
             "accessModes": ["ReadWriteOnce"],
@@ -287,15 +316,27 @@ def cmd_cluster_bootstrap(
         },
     }
 
-    typer.echo(json.dumps([data_pvc, model_pvc], indent=2))
+    manifests = [data_pvc, model_pvc]
+    typer.echo(json.dumps(manifests, indent=2))
 
     if dry_run:
         typer.echo("Dry run — manifests printed above, nothing applied.")
         return
 
-    raise NotImplementedError(
-        "Cluster bootstrapping (kubectl apply) not yet implemented."
+    # Ensure namespace exists (idempotent)
+    subprocess.run(
+        ["kubectl", "create", "namespace", namespace],
+        check=False, text=True, capture_output=True,
     )
+
+    for manifest in manifests:
+        _run_kubectl(
+            ["kubectl", "apply", "-n", namespace, "-f", "-"],
+            input_text=json.dumps(manifest),
+        )
+        typer.echo(f"Applied {manifest['kind']} '{manifest['metadata']['name']}'")
+
+    typer.echo("Cluster bootstrap complete.")
 
 
 # ---------------------------------------------------------------------------

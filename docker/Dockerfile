@@ -4,17 +4,27 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1
 
+ARG MAMBA_WHEEL_URL=https://github.com/state-spaces/mamba/releases/download/v2.2.2/mamba_ssm-2.2.2+cu122torch2.4cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+
 WORKDIR /workspace
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git curl \
  && rm -rf /var/lib/apt/lists/*
 
+# Install mamba_ssm from pre-built wheel (CPU fallback via selective_scan_ref)
+RUN pip install --upgrade pip setuptools wheel ninja packaging \
+ && pip install "${MAMBA_WHEEL_URL}"
+
+# Install kfp-workflow
 COPY pyproject.toml README.md /workspace/
 COPY src /workspace/src
 COPY configs /workspace/configs
+RUN pip install ".[serving]"
 
-RUN pip install --upgrade pip setuptools wheel \
- && pip install .
+# Install mambasl-new as co-located package
+COPY mambasl-new/pyproject.toml mambasl-new/README.md /workspace/mambasl-new/
+COPY mambasl-new/src /workspace/mambasl-new/src
+RUN pip install ./mambasl-new
 
 ENTRYPOINT ["python", "-m", "kfp_workflow.cli.main"]

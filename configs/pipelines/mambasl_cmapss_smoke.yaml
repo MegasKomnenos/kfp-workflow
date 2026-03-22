@@ -1,0 +1,73 @@
+metadata:
+  name: mambasl-cmapss-smoke
+  description: MambaSL C-MAPSS FD001 smoke test (2 epochs, CPU only)
+  version: v1
+
+runtime:
+  namespace: kubeflow-user-example-com
+  pipeline_root: ""
+  image: kfp-workflow:latest
+  image_pull_policy: IfNotPresent
+  service_account: default-editor
+  host: "http://127.0.0.1:8888"
+  port_forward_namespace: kubeflow
+  port_forward_service: svc/ml-pipeline
+  use_gpu: false
+  torch_num_threads: 4
+  resources:
+    cpu_request: "4"
+    cpu_limit: "4"
+    memory_request: 8Gi
+    memory_limit: 8Gi
+    gpu_request: "0"
+    gpu_limit: "0"
+
+storage:
+  data_pvc: dataset-store
+  model_pvc: model-store
+  storage_class: local-path
+  data_size: 8Gi
+  model_size: 8Gi
+  data_mount_path: /mnt/data
+  model_mount_path: /mnt/models
+
+model:
+  name: mambasl-cmapss
+  version: v1
+  config:
+    d_model: 32
+    d_state: 8
+    d_conv: 3
+    expand: 1
+    num_kernels: 3
+    tv_dt: true
+    tv_B: true
+    tv_C: true
+    use_D: true
+    projection: last
+    dropout: 0.1
+    huber_delta: 1.0
+    window_size: 30
+    max_rul: 125.0
+
+dataset:
+  name: cmapss
+  version: v1
+  config:
+    fd_name: FD001
+    download_policy: if_missing
+    feature_mode: settings_plus_sensors
+    norm_mode: condition_minmax
+    nasa_url: "https://data.nasa.gov/download/fd5c-bxgi/application%2Fx-zip-compressed"
+    nasa_md5: 79a22f36e80606c69d0e9e4da5bb2b7a
+
+train:
+  seed: 42
+  batch_size: 64
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  max_epochs: 2
+  patience: 1
+  val_split: 0.2
+  selection_metric: rmse
+  score_weight: 0.01

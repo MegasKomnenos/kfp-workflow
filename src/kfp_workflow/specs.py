@@ -55,6 +55,8 @@ class StorageSpec(BaseModel):
     model_size: str = "32Gi"
     data_mount_path: str = "/mnt/data"
     model_mount_path: str = "/mnt/models"
+    seed_source_dir: str = ""
+    skip_seed: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -65,12 +67,14 @@ class DatasetRef(BaseModel):
     """Reference to a registered dataset."""
     name: str
     version: str = "v1"
+    config: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ModelRef(BaseModel):
-    """Reference to a model architecture config in the model registry."""
+    """Reference to a model architecture and its plugin-specific config."""
     name: str
     version: str = "v1"
+    config: Dict[str, Any] = Field(default_factory=dict)
 
 
 class TrainSpec(BaseModel):
@@ -82,6 +86,8 @@ class TrainSpec(BaseModel):
     max_epochs: int = 50
     patience: int = 8
     val_split: float = 0.2
+    selection_metric: str = "rmse"
+    score_weight: float = 0.01
 
 
 class PipelineSpec(BaseModel):
@@ -106,9 +112,11 @@ class ServingSpec(BaseModel):
     model_version: str = "v1"
     model_pvc: str = "model-store"
     model_subpath: str
-    runtime: str = "kserve-torchserve"
+    runtime: str = "custom"
+    predictor_image: str = ""
     replicas: int = 1
     resources: ResourceSpec = Field(default_factory=ResourceSpec)
+    serving_model_config: Dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

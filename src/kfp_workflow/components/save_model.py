@@ -1,4 +1,4 @@
-"""KFP component: save model weights to PVC and optionally register."""
+"""KFP component: save model weights and register via model plugin."""
 
 from kfp import dsl
 
@@ -11,7 +11,7 @@ def save_model_component(
     train_result_json: str,
     eval_result_json: str,
 ) -> str:
-    """Save model weights to PVC. Optionally register in model registry.
+    """Save model weights to PVC and register in model registry.
 
     Parameters
     ----------
@@ -25,6 +25,31 @@ def save_model_component(
     Returns
     -------
     str
-        JSON: ``{"saved_path": str, "model_name": str, "model_version": str}``
+        JSON with saved path, model name, and version.
     """
-    raise NotImplementedError("save_model_component not yet implemented")
+    import json
+    from kfp_workflow.plugins import get_plugin
+    from kfp_workflow.plugins.base import (
+        EvalResult,
+        TrainResult,
+        result_to_dict,
+    )
+
+    spec = json.loads(spec_json)
+    train_result = TrainResult(**json.loads(train_result_json))
+    eval_result = EvalResult(**json.loads(eval_result_json))
+
+    plugin = get_plugin(spec["model"]["name"])
+    model_name = spec["model"]["name"]
+    model_version = spec["model"].get("version", "v1")
+    final_model_dir = (
+        f"{spec['storage']['model_mount_path']}/{model_name}/{model_version}"
+    )
+
+    result = plugin.save_model(
+        spec=spec,
+        train_result=train_result,
+        eval_result=eval_result,
+        final_model_dir=final_model_dir,
+    )
+    return json.dumps(result_to_dict(result))
