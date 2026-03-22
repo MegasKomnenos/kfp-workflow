@@ -92,9 +92,31 @@ kfp-workflow pipeline submit \
   --spec configs/pipelines/mambasl_cmapss_smoke.yaml
 ```
 
-### 6. Monitor
+### 6. Monitor pipeline runs
 ```bash
-kubectl get pods -n kubeflow-user-example-com -w
+# List recent runs
+kfp-workflow pipeline run list
+
+# Get details of a specific run
+kfp-workflow pipeline run get <run_id>
+
+# Wait for a run to complete (blocks with spinner)
+kfp-workflow pipeline run wait <run_id> --timeout 3600
+
+# View component logs from a run
+kfp-workflow pipeline run logs <run_id>
+
+# View logs for a specific step
+kfp-workflow pipeline run logs <run_id> --step train
+
+# Terminate a running pipeline
+kfp-workflow pipeline run terminate <run_id>
+
+# List experiments
+kfp-workflow pipeline experiment list
+
+# JSON output for scripting
+kfp-workflow --json pipeline run list
 ```
 
 ### 7. Verify pipeline completion
@@ -120,8 +142,9 @@ kfp-workflow serve create \
 
 ### 9. Test inference
 ```bash
-# Wait for InferenceService to be ready
-kubectl get inferenceservice -n kubeflow-user-example-com -w
+# Check InferenceService status
+kfp-workflow serve list
+kfp-workflow serve get --name mambasl-cmapss-serving
 
 # Send test request
 curl -X POST http://<isvc-url>/v1/models/mambasl-cmapss-serving:predict \

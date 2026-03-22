@@ -10,6 +10,19 @@ from typing import Optional
 import typer
 
 # ---------------------------------------------------------------------------
+# Global state
+# ---------------------------------------------------------------------------
+
+_json_output = False
+
+
+def _run_state_str(state: object) -> str:
+    """Extract run state as a plain string (handles enum or str)."""
+    if state is None:
+        return "UNKNOWN"
+    return state.value if hasattr(state, "value") else str(state)
+
+# ---------------------------------------------------------------------------
 # App and sub-apps
 # ---------------------------------------------------------------------------
 
@@ -20,6 +33,8 @@ app = typer.Typer(
 )
 
 pipeline_app = typer.Typer(help="Compile and submit training pipelines.")
+run_app = typer.Typer(help="Monitor and manage pipeline runs.")
+experiment_app = typer.Typer(help="Manage pipeline experiments.")
 serve_app = typer.Typer(help="Create and manage KServe InferenceServices.")
 registry_app = typer.Typer(help="Register and retrieve models and datasets.")
 model_reg_app = typer.Typer(help="Model registry operations.")
@@ -28,12 +43,25 @@ cluster_app = typer.Typer(help="Cluster bootstrapping operations.")
 spec_app = typer.Typer(help="Spec validation.")
 
 app.add_typer(pipeline_app, name="pipeline")
+pipeline_app.add_typer(run_app, name="run")
+pipeline_app.add_typer(experiment_app, name="experiment")
 app.add_typer(serve_app, name="serve")
 app.add_typer(registry_app, name="registry")
 registry_app.add_typer(model_reg_app, name="model")
 registry_app.add_typer(dataset_reg_app, name="dataset")
 app.add_typer(cluster_app, name="cluster")
 app.add_typer(spec_app, name="spec")
+
+
+@app.callback()
+def main_callback(
+    json_mode: bool = typer.Option(
+        False, "--json", help="Output in JSON format.",
+    ),
+) -> None:
+    """KFP v2 training pipeline and KServe serving workflow manager."""
+    global _json_output
+    _json_output = json_mode
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +115,7 @@ def cmd_pipeline_submit(
     spec: Path = typer.Option(..., help="Path to a pipeline YAML spec."),
     namespace: Optional[str] = typer.Option(None, help="Kubernetes namespace override."),
     host: Optional[str] = typer.Option(None, help="KFP API host override."),
+    user: Optional[str] = typer.Option(None, help="Kubeflow user identity header."),
     existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
     cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
 ) -> None:
@@ -101,8 +130,300 @@ def cmd_pipeline_submit(
         host=host,
         existing_token=existing_token,
         cookies=cookies,
+        user=user,
     )
     typer.echo(f"Pipeline submitted. Run ID: {run_id}")
+
+
+# ---------------------------------------------------------------------------
+# pipeline run commands
+# ---------------------------------------------------------------------------
+
+@run_app.command("get")
+def cmd_run_get(
+    run_id: str = typer.Argument(..., help="Pipeline run ID."),
+    namespace: str = typer.Option(
+        "kubeflow-user-example-com", help="Kubernetes namespace.",
+    ),
+    host: str = typer.Option(
+        "http://127.0.0.1:8888", help="KFP API host.",
+    ),
+    user: str = typer.Option(
+        "user@example.com", help="Kubeflow user identity header.",
+    ),
+    existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
+    cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
+) -> None:
+    """Get details of a pipeline run by ID."""
+    from kfp_workflow.cli.output import print_json, print_kv, style_run_state
+    from kfp_workflow.pipeline.connection import kfp_connection
+
+    with kfp_connection(
+        namespace=namespace, host=host, user=user,
+        existing_token=existing_token, cookies=cookies,
+    ) as client:
+        run = client.get_run(run_id=run_id)
+
+    state = _run_state_str(run.state)
+
+    if _json_output:
+        print_json({
+            "run_id": run.run_id,
+            "display_name": run.display_name,
+            "state": state,
+            "created_at": str(run.created_at),
+            "finished_at": str(run.finished_at),
+            "experiment_id": run.experiment_id,
+            "error": str(run.error) if run.error else None,
+        })
+        return
+
+    pairs = [
+        ("Run ID", run.run_id or ""),
+        ("Name", run.display_name or ""),
+        ("State", style_run_state(state)),
+        ("Created", str(run.created_at or "")),
+        ("Finished", str(run.finished_at or "")),
+        ("Experiment ID", run.experiment_id or ""),
+    ]
+    if run.error:
+        pairs.append(("Error", str(run.error)))
+    print_kv(pairs)
+
+
+@run_app.command("list")
+def cmd_run_list(
+    namespace: str = typer.Option(
+        "kubeflow-user-example-com", help="Kubernetes namespace.",
+    ),
+    experiment_id: Optional[str] = typer.Option(
+        None, help="Filter by experiment ID.",
+    ),
+    page_size: int = typer.Option(20, help="Number of runs to return."),
+    sort_by: str = typer.Option(
+        "created_at desc", help="Sort order (e.g. 'created_at desc').",
+    ),
+    host: str = typer.Option(
+        "http://127.0.0.1:8888", help="KFP API host.",
+    ),
+    user: str = typer.Option(
+        "user@example.com", help="Kubeflow user identity header.",
+    ),
+    existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
+    cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
+) -> None:
+    """List pipeline runs."""
+    from kfp_workflow.cli.output import print_json, print_table, style_run_state
+    from kfp_workflow.pipeline.connection import kfp_connection
+
+    with kfp_connection(
+        namespace=namespace, host=host, user=user,
+        existing_token=existing_token, cookies=cookies,
+    ) as client:
+        response = client.list_runs(
+            page_size=page_size,
+            sort_by=sort_by,
+            experiment_id=experiment_id,
+            namespace=namespace,
+        )
+
+    runs = response.runs or []
+
+    if _json_output:
+        print_json([{
+            "run_id": r.run_id,
+            "display_name": r.display_name,
+            "state": _run_state_str(r.state),
+            "created_at": str(r.created_at),
+            "finished_at": str(r.finished_at),
+        } for r in runs])
+        return
+
+    rows = []
+    for r in runs:
+        state = _run_state_str(r.state)
+        rows.append((
+            (r.run_id or "")[:8],
+            r.display_name or "",
+            style_run_state(state),
+            str(r.created_at or ""),
+            str(r.finished_at or ""),
+        ))
+    print_table(
+        title="Pipeline Runs",
+        columns=["ID", "NAME", "STATE", "CREATED", "FINISHED"],
+        rows=rows,
+    )
+
+
+@run_app.command("wait")
+def cmd_run_wait(
+    run_id: str = typer.Argument(..., help="Pipeline run ID."),
+    timeout: int = typer.Option(3600, help="Timeout in seconds."),
+    namespace: str = typer.Option(
+        "kubeflow-user-example-com", help="Kubernetes namespace.",
+    ),
+    host: str = typer.Option(
+        "http://127.0.0.1:8888", help="KFP API host.",
+    ),
+    user: str = typer.Option(
+        "user@example.com", help="Kubeflow user identity header.",
+    ),
+    existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
+    cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
+) -> None:
+    """Wait for a pipeline run to reach a terminal state."""
+    from kfp_workflow.cli.output import console, style_run_state
+    from kfp_workflow.pipeline.connection import kfp_connection
+
+    with kfp_connection(
+        namespace=namespace, host=host, user=user,
+        existing_token=existing_token, cookies=cookies,
+    ) as client:
+        with console.status(f"Waiting for run {run_id[:8]}..."):
+            run = client.wait_for_run_completion(run_id, timeout=timeout)
+
+    state = _run_state_str(run.state)
+    console.print(f"Run {run_id[:8]} finished: {style_run_state(state)}")
+
+    if state in ("FAILED", "CANCELED"):
+        if run.error:
+            console.print(f"Error: {run.error}", style="red")
+        raise typer.Exit(code=1)
+
+
+@run_app.command("terminate")
+def cmd_run_terminate(
+    run_id: str = typer.Argument(..., help="Pipeline run ID."),
+    namespace: str = typer.Option(
+        "kubeflow-user-example-com", help="Kubernetes namespace.",
+    ),
+    host: str = typer.Option(
+        "http://127.0.0.1:8888", help="KFP API host.",
+    ),
+    user: str = typer.Option(
+        "user@example.com", help="Kubeflow user identity header.",
+    ),
+    existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
+    cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
+) -> None:
+    """Terminate (cancel) a running pipeline."""
+    from kfp_workflow.pipeline.connection import kfp_connection
+
+    with kfp_connection(
+        namespace=namespace, host=host, user=user,
+        existing_token=existing_token, cookies=cookies,
+    ) as client:
+        client.terminate_run(run_id)
+
+    typer.echo(f"Run {run_id[:8]} terminated.")
+
+
+@run_app.command("logs")
+def cmd_run_logs(
+    run_id: str = typer.Argument(..., help="Pipeline run ID."),
+    step: Optional[str] = typer.Option(
+        None, help="Filter pods by step name substring.",
+    ),
+    namespace: str = typer.Option(
+        "kubeflow-user-example-com", help="Kubernetes namespace.",
+    ),
+) -> None:
+    """View logs from a pipeline run's component pods."""
+    from kubernetes import client as k8s_client
+    from kubernetes import config as k8s_config
+
+    from kfp_workflow.cli.output import console
+
+    k8s_config.load_kube_config()
+    v1 = k8s_client.CoreV1Api()
+
+    pods = v1.list_namespaced_pod(
+        namespace=namespace,
+        label_selector=f"pipeline/runid={run_id}",
+    )
+
+    # Filter to implementation pods (contain actual component output)
+    impl_pods = [
+        p for p in pods.items
+        if "system-container-impl" in p.metadata.name
+    ]
+
+    if step:
+        impl_pods = [p for p in impl_pods if step in p.metadata.name]
+
+    if not impl_pods:
+        typer.echo("No matching pods found.", err=True)
+        raise typer.Exit(code=1)
+
+    for pod in sorted(impl_pods, key=lambda p: p.metadata.name):
+        console.rule(f"[bold]{pod.metadata.name}[/bold]")
+        try:
+            log = v1.read_namespaced_pod_log(
+                name=pod.metadata.name,
+                namespace=namespace,
+                container="main",
+            )
+            typer.echo(log)
+        except k8s_client.ApiException as exc:
+            typer.echo(f"  (error reading logs: {exc.reason})", err=True)
+
+
+# ---------------------------------------------------------------------------
+# pipeline experiment commands
+# ---------------------------------------------------------------------------
+
+@experiment_app.command("list")
+def cmd_experiment_list(
+    namespace: str = typer.Option(
+        "kubeflow-user-example-com", help="Kubernetes namespace.",
+    ),
+    page_size: int = typer.Option(20, help="Number of experiments to return."),
+    host: str = typer.Option(
+        "http://127.0.0.1:8888", help="KFP API host.",
+    ),
+    user: str = typer.Option(
+        "user@example.com", help="Kubeflow user identity header.",
+    ),
+    existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
+    cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
+) -> None:
+    """List pipeline experiments."""
+    from kfp_workflow.cli.output import print_json, print_table
+    from kfp_workflow.pipeline.connection import kfp_connection
+
+    with kfp_connection(
+        namespace=namespace, host=host, user=user,
+        existing_token=existing_token, cookies=cookies,
+    ) as client:
+        response = client.list_experiments(
+            page_size=page_size, namespace=namespace,
+        )
+
+    experiments = response.experiments or []
+
+    if _json_output:
+        print_json([{
+            "experiment_id": e.experiment_id,
+            "display_name": e.display_name,
+            "created_at": str(e.created_at),
+            "last_run_created_at": str(e.last_run_created_at),
+        } for e in experiments])
+        return
+
+    rows = []
+    for e in experiments:
+        rows.append((
+            (e.experiment_id or "")[:8],
+            e.display_name or "",
+            str(e.created_at or ""),
+            str(e.last_run_created_at or ""),
+        ))
+    print_table(
+        title="Experiments",
+        columns=["ID", "NAME", "CREATED", "LAST RUN"],
+        rows=rows,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +467,98 @@ def cmd_serve_delete(
 
     delete_inference_service(name=name, namespace=namespace)
     typer.echo(f"InferenceService '{name}' deleted.")
+
+
+@serve_app.command("list")
+def cmd_serve_list(
+    namespace: str = typer.Option(
+        "kubeflow-user-example-com", help="Kubernetes namespace.",
+    ),
+) -> None:
+    """List KServe InferenceServices in a namespace."""
+    from kfp_workflow.cli.output import (
+        print_json,
+        print_table,
+        style_isvc_ready,
+    )
+    from kfp_workflow.serving.kserve import list_inference_services
+
+    items = list_inference_services(namespace=namespace)
+
+    if _json_output:
+        print_json([{
+            "name": svc["metadata"]["name"],
+            "ready": _isvc_ready(svc),
+            "url": svc.get("status", {}).get("url", ""),
+        } for svc in items])
+        return
+
+    rows = []
+    for svc in items:
+        name = svc["metadata"]["name"]
+        ready = _isvc_ready(svc)
+        url = svc.get("status", {}).get("url", "")
+        created = svc["metadata"].get("creationTimestamp", "")
+        rows.append((name, style_isvc_ready(ready), url, created))
+
+    print_table(
+        title="InferenceServices",
+        columns=["NAME", "READY", "URL", "CREATED"],
+        rows=rows,
+    )
+
+
+@serve_app.command("get")
+def cmd_serve_get(
+    name: str = typer.Option(..., help="InferenceService name."),
+    namespace: str = typer.Option(
+        "kubeflow-user-example-com", help="Kubernetes namespace.",
+    ),
+) -> None:
+    """Get detailed status of a KServe InferenceService."""
+    from kfp_workflow.cli.output import print_json, print_kv, style_isvc_ready
+    from kfp_workflow.serving.kserve import get_inference_service
+
+    svc = get_inference_service(name=name, namespace=namespace)
+
+    ready = _isvc_ready(svc)
+    url = svc.get("status", {}).get("url", "")
+    created = svc["metadata"].get("creationTimestamp", "")
+    conditions = svc.get("status", {}).get("conditions", [])
+
+    if _json_output:
+        print_json({
+            "name": name,
+            "namespace": namespace,
+            "ready": ready,
+            "url": url,
+            "created": created,
+            "conditions": conditions,
+        })
+        return
+
+    pairs = [
+        ("Name", name),
+        ("Namespace", namespace),
+        ("Ready", style_isvc_ready(ready)),
+        ("URL", url or "(none)"),
+        ("Created", created),
+    ]
+    for cond in conditions:
+        ctype = cond.get("type", "")
+        cstatus = cond.get("status", "")
+        pairs.append((f"  {ctype}", cstatus))
+
+    print_kv(pairs)
+
+
+def _isvc_ready(svc: dict) -> str:
+    """Extract the Ready condition status from an InferenceService dict."""
+    conditions = svc.get("status", {}).get("conditions", [])
+    for cond in conditions:
+        if cond.get("type") == "Ready":
+            return cond.get("status", "Unknown")
+    return "Unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -200,12 +613,22 @@ def cmd_model_list(
     ),
 ) -> None:
     """List all models in the file-backed model registry."""
+    from kfp_workflow.cli.output import print_json, print_table
     from kfp_workflow.registry.model_registry import FileModelRegistry
 
     registry = FileModelRegistry(registry_path=registry_path)
     models = registry.list_models()
-    for m in models:
-        typer.echo(f"{m.name} v{m.version} ({m.framework})")
+
+    if _json_output:
+        print_json([m.model_dump() for m in models])
+        return
+
+    rows = [(m.name, m.version, m.framework, m.uri) for m in models]
+    print_table(
+        title="Models",
+        columns=["NAME", "VERSION", "FRAMEWORK", "URI"],
+        rows=rows,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -260,12 +683,24 @@ def cmd_dataset_list(
     ),
 ) -> None:
     """List all datasets in the PVC dataset registry."""
+    from kfp_workflow.cli.output import print_json, print_table
     from kfp_workflow.registry.dataset_registry import PVCDatasetRegistry
 
     registry = PVCDatasetRegistry(registry_path=registry_path)
     datasets = registry.list_datasets()
-    for d in datasets:
-        typer.echo(f"{d.name} v{d.version} @ {d.pvc_name}:{d.subpath}")
+
+    if _json_output:
+        print_json([d.model_dump() for d in datasets])
+        return
+
+    rows = [
+        (d.name, d.version, d.pvc_name, d.subpath) for d in datasets
+    ]
+    print_table(
+        title="Datasets",
+        columns=["NAME", "VERSION", "PVC", "SUBPATH"],
+        rows=rows,
+    )
 
 
 # ---------------------------------------------------------------------------

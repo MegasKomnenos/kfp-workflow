@@ -43,7 +43,8 @@ test/
 │   ├── specs.py                       # Pydantic config models (PipelineSpec, ServingSpec)
 │   ├── utils.py                       # YAML/JSON I/O helpers
 │   ├── cli/
-│   │   └── main.py                    # Typer CLI (pipeline, serve, registry, cluster, spec)
+│   │   ├── main.py                    # Typer CLI (pipeline, serve, registry, cluster, spec)
+│   │   └── output.py                  # Rich-based structured output (tables, colors, JSON)
 │   ├── components/
 │   │   ├── __init__.py                # Re-exports all 5 component functions
 │   │   ├── load_data.py               # KFP component: load data via plugin
@@ -53,7 +54,8 @@ test/
 │   │   └── save_model.py              # KFP component: save weights via plugin
 │   ├── pipeline/
 │   │   ├── compiler.py                # Pipeline DAG assembly + KFP compilation
-│   │   └── client.py                  # kfp.Client port-forward + submission
+│   │   ├── client.py                  # Pipeline compilation + submission
+│   │   └── connection.py              # Reusable kfp_connection() context manager
 │   ├── plugins/
 │   │   ├── __init__.py                # Plugin registry dict + get_plugin()
 │   │   ├── base.py                    # ModelPlugin ABC + result dataclasses
@@ -64,12 +66,14 @@ test/
 │   │   └── dataset_registry.py        # PVCDatasetRegistry (JSON on PVC)
 │   └── serving/
 │       ├── __init__.py
-│       ├── kserve.py                  # KServe InferenceService management (custom + standard)
+│       ├── kserve.py                  # KServe InferenceService CRUD + status (custom + standard)
 │       └── predictor.py               # Custom KServe predictor (plugin dispatch)
 │
 └── tests/
     ├── test_specs.py                  # Spec loading and validation
-    ├── test_cli_protocol.py           # CLI command existence checks
+    ├── test_cli_protocol.py           # CLI command existence checks (all commands)
+    ├── test_cli_run_commands.py       # Mocked functional tests for run/serve/experiment commands
+    ├── test_output.py                 # Output formatting unit tests
     ├── test_pipeline_compile.py       # Pipeline compilation verification
     ├── test_registry.py               # File-backed registry CRUD tests
     └── test_plugin_system.py          # Plugin ABC, registry, _build_cfg tests

@@ -41,16 +41,37 @@ make compile-pipeline
 ## CLI Commands
 
 ```
+kfp-workflow [--json]                                       # Global: JSON output mode
+
+# Pipeline lifecycle
 kfp-workflow pipeline compile   --spec <path> --output <path>
-kfp-workflow pipeline submit    --spec <path> [--namespace] [--host] [--existing-token] [--cookies]
+kfp-workflow pipeline submit    --spec <path> [--namespace] [--host] [--user] [--existing-token] [--cookies]
+
+# Pipeline run monitoring
+kfp-workflow pipeline run get       <run_id>   [--namespace] [--host] [--user]
+kfp-workflow pipeline run list                 [--namespace] [--experiment-id] [--page-size] [--sort-by]
+kfp-workflow pipeline run wait      <run_id>   [--timeout] [--namespace] [--host] [--user]
+kfp-workflow pipeline run terminate <run_id>   [--namespace] [--host] [--user]
+kfp-workflow pipeline run logs      <run_id>   [--step] [--namespace]
+
+# Experiment management
+kfp-workflow pipeline experiment list          [--namespace] [--page-size] [--host] [--user]
+
+# Serving
 kfp-workflow serve create       --spec <path> [--dry-run]
-kfp-workflow serve delete       --name <name> --namespace <ns>
-kfp-workflow registry model register  --name <n> --version <v> --uri <u> [--framework] [--description] [--registry-path]
-kfp-workflow registry model get       --name <n> [--version] [--registry-path]
-kfp-workflow registry model list      [--registry-path]
-kfp-workflow registry dataset register  --name <n> --pvc-name <p> --subpath <s> [--version] [--description] [--registry-path]
+kfp-workflow serve delete       --name <name> [--namespace]
+kfp-workflow serve list         [--namespace]
+kfp-workflow serve get          --name <name> [--namespace]
+
+# Registries
+kfp-workflow registry model register    --name <n> --version <v> --uri <u> [--registry-path]
+kfp-workflow registry model get         --name <n> [--version] [--registry-path]
+kfp-workflow registry model list        [--registry-path]
+kfp-workflow registry dataset register  --name <n> --pvc-name <p> --subpath <s> [--registry-path]
 kfp-workflow registry dataset get       --name <n> [--version] [--registry-path]
 kfp-workflow registry dataset list      [--registry-path]
+
+# Infrastructure
 kfp-workflow cluster bootstrap  --spec <path> [--dry-run]
 kfp-workflow spec validate      --spec <path> [--type {pipeline,serving}]
 ```

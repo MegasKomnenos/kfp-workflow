@@ -58,3 +58,67 @@ def test_cluster_bootstrap_help():
     result = runner.invoke(app, ["cluster", "bootstrap", "--help"])
     assert result.exit_code == 0
     assert "--spec" in result.output
+
+
+# ---------------------------------------------------------------------------
+# New CLI commands — help tests
+# ---------------------------------------------------------------------------
+
+def test_json_flag_in_help():
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "--json" in result.output
+
+
+def test_pipeline_submit_has_user_option():
+    result = runner.invoke(app, ["pipeline", "submit", "--help"])
+    assert result.exit_code == 0
+    assert "--user" in result.output
+
+
+def test_pipeline_run_get_help():
+    result = runner.invoke(app, ["pipeline", "run", "get", "--help"])
+    assert result.exit_code == 0
+    assert "run-id" in result.output.lower() or "RUN_ID" in result.output
+
+
+def test_pipeline_run_list_help():
+    result = runner.invoke(app, ["pipeline", "run", "list", "--help"])
+    assert result.exit_code == 0
+    assert "--namespace" in result.output
+
+
+def test_pipeline_run_wait_help():
+    result = runner.invoke(app, ["pipeline", "run", "wait", "--help"])
+    assert result.exit_code == 0
+    assert "--timeout" in result.output
+
+
+def test_pipeline_run_terminate_help():
+    result = runner.invoke(app, ["pipeline", "run", "terminate", "--help"])
+    assert result.exit_code == 0
+    assert "run-id" in result.output.lower() or "RUN_ID" in result.output
+
+
+def test_pipeline_run_logs_help():
+    result = runner.invoke(app, ["pipeline", "run", "logs", "--help"])
+    assert result.exit_code == 0
+    assert "--step" in result.output
+
+
+def test_pipeline_experiment_list_help():
+    result = runner.invoke(app, ["pipeline", "experiment", "list", "--help"])
+    assert result.exit_code == 0
+    assert "--namespace" in result.output
+
+
+def test_serve_list_help():
+    result = runner.invoke(app, ["serve", "list", "--help"])
+    assert result.exit_code == 0
+    assert "--namespace" in result.output
+
+
+def test_serve_get_help():
+    result = runner.invoke(app, ["serve", "get", "--help"])
+    assert result.exit_code == 0
+    assert "--name" in result.output

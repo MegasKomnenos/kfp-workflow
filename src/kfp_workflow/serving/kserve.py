@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 def build_inference_service_manifest(
@@ -157,4 +157,36 @@ def delete_inference_service(name: str, namespace: str) -> None:
         check=True,
         text=True,
         capture_output=True,
+    )
+
+
+def list_inference_services(namespace: str) -> List[Dict[str, Any]]:
+    """List InferenceServices in a namespace via the Kubernetes API."""
+    from kubernetes import client as k8s_client
+    from kubernetes import config as k8s_config
+
+    k8s_config.load_kube_config()
+    api = k8s_client.CustomObjectsApi()
+    result = api.list_namespaced_custom_object(
+        group="serving.kserve.io",
+        version="v1beta1",
+        namespace=namespace,
+        plural="inferenceservices",
+    )
+    return result.get("items", [])
+
+
+def get_inference_service(name: str, namespace: str) -> Dict[str, Any]:
+    """Get a single InferenceService by name."""
+    from kubernetes import client as k8s_client
+    from kubernetes import config as k8s_config
+
+    k8s_config.load_kube_config()
+    api = k8s_client.CustomObjectsApi()
+    return api.get_namespaced_custom_object(
+        group="serving.kserve.io",
+        version="v1beta1",
+        namespace=namespace,
+        plural="inferenceservices",
+        name=name,
     )
