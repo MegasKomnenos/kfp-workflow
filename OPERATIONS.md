@@ -43,7 +43,7 @@ kfp-workflow pipeline compile \
 ## Docker Build
 
 ```bash
-# Build image with mamba_ssm + mambasl-new
+# Build image with mamba_ssm + mambasl-new (from models/mambasl-new/)
 docker build -t kfp-workflow:latest -f docker/Dockerfile .
 
 # Import into containerd for k8s
@@ -53,7 +53,7 @@ docker save kfp-workflow:latest | sudo ctr -n k8s.io images import -
 The Dockerfile installs:
 1. `mamba_ssm` from pre-built GitHub wheel (CPU fallback via `selective_scan_ref`)
 2. `kfp-workflow[serving]` (main package + kserve SDK)
-3. `mambasl-new` (ML logic package, installed from local directory)
+3. `mambasl-new` (ML model package from `models/mambasl-new/`)
 
 ## End-to-End Deployment (MambaSL C-MAPSS Smoke Test)
 
@@ -84,12 +84,25 @@ kfp-workflow registry dataset register \
 kfp-workflow pipeline compile \
   --spec configs/pipelines/mambasl_cmapss_smoke.yaml \
   --output pipelines/mambasl_cmapss_smoke.yaml
+
+# With CLI overrides (no YAML editing needed):
+kfp-workflow pipeline compile \
+  --spec configs/pipelines/mambasl_cmapss_smoke.yaml \
+  --output pipelines/experiment.yaml \
+  --set train.max_epochs=100 \
+  --set model.config.d_model=128
 ```
 
 ### 5. Submit pipeline
 ```bash
 kfp-workflow pipeline submit \
   --spec configs/pipelines/mambasl_cmapss_smoke.yaml
+
+# With overrides:
+kfp-workflow pipeline submit \
+  --spec configs/pipelines/mambasl_cmapss_smoke.yaml \
+  --set dataset.config.fd_name=FD003 \
+  --set train.learning_rate=0.0005
 ```
 
 ### 6. Monitor pipeline runs
@@ -182,6 +195,74 @@ Custom registry paths:
 ```bash
 kfp-workflow registry model list --registry-path /tmp/models.json
 ```
+
+## Monitoring Stack
+
+### Components
+
+| Component | Namespace | Access |
+|-----------|-----------|--------|
+| Prometheus | `monitoring` | ClusterIP `kube-prometheus-stack-prometheus:9090` |
+| Grafana | `monitoring` | `http://155.230.34.51:30090` (NodePort) |
+| Alertmanager | `monitoring` | ClusterIP `kube-prometheus-stack-alertmanager:9093` |
+| Node Exporter | `monitoring` | DaemonSet on port 9100 |
+| kube-state-metrics | `monitoring` | ClusterIP port 8080 |
+| Kepler | `kepler` | DaemonSet on port 9102 (hostNetwork) |
+
+### Credentials
+
+| Service | Username | Password |
+|---------|----------|----------|
+| Grafana | `admin` | `admin` |
+
+### Helm Releases
+
+```bash
+# kube-prometheus-stack (Prometheus + Grafana + node-exporter + kube-state-metrics + alertmanager)
+helm list -n monitoring
+
+# Kepler (energy monitoring)
+helm list -n kepler
+```
+
+### Common Operations
+
+```bash
+# Access Grafana
+open http://155.230.34.51:30090
+
+# Port-forward Prometheus UI
+kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090
+
+# Check Kepler pod logs
+kubectl logs -n kepler -l app.kubernetes.io/name=kepler --tail=50
+
+# Check all Prometheus scrape targets
+kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090 &
+curl -s 'http://localhost:9090/api/v1/targets' | python3 -c "
+import json, sys
+for t in json.load(sys.stdin)['data']['activeTargets']:
+    print(f\"{t['health']:6s} {t['labels'].get('job',''):30s} {t['scrapeUrl']}\")
+"
+
+# Query Kepler energy metrics
+curl -s 'http://localhost:9090/api/v1/query?query=kepler_node_platform_joules_total'
+curl -s 'http://localhost:9090/api/v1/query?query=rate(kepler_container_package_joules_total[5m])'
+```
+
+### Dashboards
+
+Grafana includes 29 pre-configured dashboards:
+- **Kepler Dashboard** — Node and container energy consumption (RAPL + GPU)
+- **Kubernetes dashboards** — Compute resources, networking, kubelet, API server
+- **Node Exporter dashboards** — Host-level system metrics
+
+### Firewall Rules Added
+
+UFW rules allow pod network (10.244.0.0/16) to reach hostNetwork services:
+- Port 9102 (Kepler)
+- Port 9100 (node-exporter)
+- Ports 10249, 10257, 10259, 2381 (k8s control plane — bound to localhost, so still inaccessible)
 
 ## Architecture Notes
 
