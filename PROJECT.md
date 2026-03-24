@@ -21,16 +21,32 @@ test/
 ├── docker/
 │   └── Dockerfile                     # Base image (PyTorch + CUDA + mamba_ssm + mambasl-new)
 │
+├── examples/                          # Korean-language tutorials and usage guides
+│   ├── README.md                      # Table of contents and learning order
+│   ├── 00_프로젝트_개요.md            # Project overview, philosophy, architecture
+│   ├── 01_설치_및_설정.md             # Installation and environment setup
+│   ├── 02_스펙_파일_작성_및_검증.md   # Pipeline/serving spec authoring and validation
+│   ├── 03_파이프라인_컴파일_및_제출.md # Pipeline compile, submit, and DAG overview
+│   ├── 04_파이프라인_실행_모니터링.md  # Run get/list/wait/terminate/logs
+│   ├── 05_CLI_설정_오버라이드.md       # --set flag, type coercion, plugin schemas
+│   ├── 06_서빙_배포_및_추론.md        # KServe InferenceService create/list/get/delete
+│   ├── 07_레지스트리_관리.md          # Model and dataset registry management
+│   ├── 08_클러스터_부트스트랩.md       # PVC provisioning via cluster bootstrap
+│   ├── 09_Docker_이미지_빌드.md       # Docker image build and optimization
+│   └── 10_새_모델_플러그인_개발.md    # ModelPlugin ABC implementation guide
+│
 ├── kubeflow/
 │   └── pvc/
 │       ├── dataset-pvc.yaml           # Dataset PVC manifest
 │       └── model-pvc.yaml             # Model weights PVC manifest
 │
-├── mambasl-new/                       # Sibling package — ML logic (installed in Docker image)
-│   └── src/mambasl_new/
-│       ├── cmapss/                    # C-MAPSS data, preprocessing, model, training
-│       ├── mamba_layers/              # Mamba_TimeVariant, PositionalEmbedding
-│       └── ...
+├── models/
+│   └── mambasl-new/                   # MambaSL model package (installed in Docker image)
+│       └── src/mambasl_new/
+│           ├── cmapss/                # C-MAPSS data, preprocessing, model, training
+│           ├── mamba_layers/          # Mamba_TimeVariant, PositionalEmbedding
+│           ├── kubeflow/              # Katib manifest construction, HPO pipeline
+│           └── cli/                   # Container-internal CLI (train, katib-trial)
 │
 ├── pipelines/
 │   └── README.md                      # Compiled YAML output (git-ignored)
@@ -40,6 +56,7 @@ test/
 │
 ├── src/kfp_workflow/
 │   ├── __init__.py                    # Package root, __version__
+│   ├── config_override.py             # CLI --set override utilities (coerce, merge, validate)
 │   ├── specs.py                       # Pydantic config models (PipelineSpec, ServingSpec)
 │   ├── utils.py                       # YAML/JSON I/O helpers
 │   ├── cli/
@@ -73,6 +90,7 @@ test/
     ├── test_specs.py                  # Spec loading and validation
     ├── test_cli_protocol.py           # CLI command existence checks (all commands)
     ├── test_cli_run_commands.py       # Mocked functional tests for run/serve/experiment commands
+    ├── test_config_override.py        # CLI --set override system tests
     ├── test_output.py                 # Output formatting unit tests
     ├── test_pipeline_compile.py       # Pipeline compilation verification
     ├── test_registry.py               # File-backed registry CRUD tests
