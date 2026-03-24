@@ -252,10 +252,27 @@ curl -s 'http://localhost:9090/api/v1/query?query=rate(kepler_container_package_
 
 ### Dashboards
 
-Grafana includes 29 pre-configured dashboards:
-- **Kepler Dashboard** — Node and container energy consumption (RAPL + GPU)
-- **Kubernetes dashboards** — Compute resources, networking, kubelet, API server
-- **Node Exporter dashboards** — Host-level system metrics
+Grafana includes 36 dashboards:
+
+**Kepler Energy Dashboards (8):**
+- **Kepler Dashboard** — Main production dashboard: cluster/node/pod/container energy (30 panels)
+- **Kepler Energy Monitoring Dashboard** — Dev/validation: Node Exporter vs Kepler comparison (20 panels)
+- **Power Monitor Dashboard** — Cluster-wide + per-zone active/idle power (17 panels)
+- **Power Monitor / Overview** — High-level cluster power overview (8 panels)
+- **Power Monitor / Node** — Per-node zone power breakdown (5 panels)
+- **Power Monitor / Namespace (Pods)** — Top power-consuming namespaces drill-down (3 panels)
+- **Kepler Exporter Dashboard** — Carbon emissions footprint, CO2/kWh tracking (7 panels)
+- **Power Source Comparison** — Side-by-side power estimation method comparison (4 panels)
+
+**Kubernetes dashboards** — Compute resources, networking, kubelet, API server
+**Node Exporter dashboards** — Host-level system metrics
+
+All Kepler dashboards are persisted via labeled ConfigMaps (`grafana_dashboard=1`) in the `monitoring` namespace and are auto-provisioned by the Grafana sidecar.
+
+Dashboard sources:
+- `sustainable-computing-io/kepler` main branch (compose/default + compose/dev)
+- `sustainable-computing-io/kepler` release-0.6 branch (legacy exporter)
+- `sustainable-computing-io/kepler-operator` main branch (operator dashboards)
 
 ### Firewall Rules Added
 
