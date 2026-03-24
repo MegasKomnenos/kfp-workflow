@@ -1,0 +1,62 @@
+metadata:
+  name: multirocket-new-fd001-smoke
+  description: Minimal FD001 smoke workflow
+runtime:
+  namespace: kubeflow-user-example-com
+  pipeline_root: s3://mlpipeline/multirocket-new/fd001-smoke
+  image: multirocket-new:latest
+  image_pull_policy: IfNotPresent
+  service_account: default-editor
+  resources:
+    cpu_request: "2"
+    cpu_limit: "2"
+    memory_request: 6Gi
+    memory_limit: 6Gi
+    gpu_request: "0"
+    gpu_limit: "0"
+storage:
+  mode: download
+  data_pvc: cmapss-data
+  results_pvc: cmapss-results
+  storage_class: local-path
+  data_size: 8Gi
+  results_size: 32Gi
+  data_mount_path: /mnt/data
+  results_mount_path: /mnt/results
+data:
+  data_root: data/cmapss
+  download_policy: if_missing
+datasets:
+  items: [FD001]
+stages: [final_train_eval, aggregate_reports]
+train_defaults:
+  seed: 42
+  feature_mode: selected_sensors
+  scaling_mode: global
+  seq_len: 40
+  train_stride: 2
+  max_rul: 125
+  val_frac: 0.2
+  val_mode: sampled_last
+  val_samples_per_unit: 4
+  n_jobs: 2
+  predict_batch_size: 128
+  selection_metric: rmse
+  score_weight: 0.01
+  fixed_params:
+    mr_num_kernels: 84
+    n_kernels: 1
+    n_groups: 32
+    n_kernels_sp: 64
+hpo:
+  enabled: false
+  builtin_profile: default
+  algorithm: random
+  max_trial_count: 1
+  parallel_trial_count: 1
+  max_failed_trial_count: 1
+ablations:
+  enabled: false
+  axes: {}
+outputs:
+  local_results_dir: results

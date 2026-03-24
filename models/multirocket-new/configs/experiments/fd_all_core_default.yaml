@@ -1,0 +1,61 @@
+metadata:
+  name: multirocket-new-fd-all-default
+  description: Default four-dataset Kubeflow and Katib workflow
+runtime:
+  namespace: kubeflow-user-example-com
+  pipeline_root: s3://mlpipeline/multirocket-new/fd-all-default
+  image: multirocket-new:latest
+  image_pull_policy: IfNotPresent
+  service_account: default-editor
+  resources:
+    cpu_request: "2"
+    cpu_limit: "4"
+    memory_request: 6Gi
+    memory_limit: 12Gi
+    gpu_request: "0"
+    gpu_limit: "0"
+storage:
+  mode: pvc
+  data_pvc: cmapss-data
+  results_pvc: cmapss-results
+  storage_class: local-path
+  data_size: 8Gi
+  results_size: 32Gi
+  data_mount_path: /mnt/data
+  results_mount_path: /mnt/results
+datasets:
+  items: [FD001, FD002, FD003, FD004]
+stages: [hpo, final_train_eval, ablation_sweep, aggregate_reports]
+train_defaults:
+  seed: 42
+  feature_mode: selected_sensors
+  scaling_mode: global
+  seq_len: 50
+  train_stride: 2
+  max_rul: 125
+  val_frac: 0.2
+  val_mode: sampled_last
+  val_samples_per_unit: 8
+  n_jobs: 4
+  predict_batch_size: 512
+  selection_metric: rmse
+  score_weight: 0.01
+  fixed_params:
+    mr_num_kernels: 84
+    n_kernels: 1
+    n_groups: 32
+    n_kernels_sp: 128
+hpo:
+  enabled: true
+  builtin_profile: default
+  algorithm: random
+  max_trial_count: 8
+  parallel_trial_count: 2
+  max_failed_trial_count: 2
+ablations:
+  enabled: true
+  axes:
+    seed: [7, 42]
+    seq_len: [40, 50]
+outputs:
+  local_results_dir: results

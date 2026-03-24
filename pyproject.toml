@@ -14,6 +14,7 @@ dependencies = [
     "kfp[kubernetes]==2.15.0",
     "kubernetes>=29,<31",
     "numpy>=1.24,<2",
+    "optuna>=4.5,<5",
     "pandas>=2.0,<2.3",
     "pydantic>=2.7,<3",
     "PyYAML>=6,<7",

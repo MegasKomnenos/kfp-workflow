@@ -415,3 +415,136 @@ class MambaSLCmapssPlugin(ModelPlugin):
         return predict_array(
             model, input_data, float(cfg.get("max_rul", 125.0)), device=device,
         )
+
+    # -- HPO hooks ----------------------------------------------------------
+
+    def hpo_search_space(
+        self,
+        spec: Dict[str, Any],
+        profile: str,
+    ) -> list:
+        from kfp_workflow.specs import SearchParamSpec
+
+        if profile == "aggressive":
+            return [
+                SearchParamSpec(name="d_model", type="categorical", values=[32, 64, 128]),
+                SearchParamSpec(name="d_state", type="categorical", values=[8, 16, 32]),
+                SearchParamSpec(name="d_conv", type="categorical", values=[2, 3, 4]),
+                SearchParamSpec(name="expand", type="categorical", values=[1, 2]),
+                SearchParamSpec(name="num_kernels", type="categorical", values=[0, 3, 5, 7]),
+                SearchParamSpec(name="tv_dt", type="categorical", values=[False, True]),
+                SearchParamSpec(name="tv_B", type="categorical", values=[False, True]),
+                SearchParamSpec(name="tv_C", type="categorical", values=[False, True]),
+                SearchParamSpec(name="use_D", type="categorical", values=[False, True]),
+                SearchParamSpec(name="projection", type="categorical", values=["last", "avg"]),
+                SearchParamSpec(name="dropout", type="categorical", values=[0.0, 0.1, 0.2, 0.3, 0.4]),
+                SearchParamSpec(name="batch_size", type="categorical", values=[64, 128, 256]),
+                SearchParamSpec(name="lr", type="log_float", low=3e-4, high=3e-3),
+                SearchParamSpec(name="weight_decay", type="log_float", low=1e-6, high=1e-3),
+                SearchParamSpec(name="huber_delta", type="categorical", values=[1.0, 2.0, 5.0]),
+                SearchParamSpec(name="window_size", type="categorical", values=[30, 40, 50, 60, 70]),
+                SearchParamSpec(name="max_rul", type="categorical", values=[115.0, 120.0, 125.0, 130.0, 150.0]),
+            ]
+        # "default" profile
+        return [
+            SearchParamSpec(name="d_model", type="categorical", values=[32, 64, 128]),
+            SearchParamSpec(name="d_state", type="categorical", values=[8, 16, 32]),
+            SearchParamSpec(name="d_conv", type="categorical", values=[3, 4]),
+            SearchParamSpec(name="expand", type="categorical", values=[1, 2]),
+            SearchParamSpec(name="num_kernels", type="categorical", values=[0, 3, 5, 7]),
+            SearchParamSpec(name="tv_dt", type="categorical", values=[False, True]),
+            SearchParamSpec(name="tv_B", type="categorical", values=[False, True]),
+            SearchParamSpec(name="tv_C", type="categorical", values=[False, True]),
+            SearchParamSpec(name="use_D", type="categorical", values=[False, True]),
+            SearchParamSpec(name="projection", type="categorical", values=["last", "avg"]),
+            SearchParamSpec(name="dropout", type="categorical", values=[0.0, 0.1, 0.2, 0.3]),
+            SearchParamSpec(name="batch_size", type="categorical", values=[64, 128, 256]),
+            SearchParamSpec(name="lr", type="log_float", low=3e-4, high=3e-3),
+            SearchParamSpec(name="weight_decay", type="log_float", low=1e-6, high=1e-3),
+            SearchParamSpec(name="huber_delta", type="categorical", values=[1.0, 2.0, 5.0]),
+            SearchParamSpec(name="window_size", type="categorical", values=[30, 40, 50]),
+            SearchParamSpec(name="max_rul", type="categorical", values=[125.0, 130.0, 150.0]),
+        ]
+
+    def hpo_base_config(self, spec: Dict[str, Any]) -> Dict[str, Any]:
+        return _build_cfg(spec)
+
+    def hpo_objective(
+        self,
+        spec: Dict[str, Any],
+        params: Dict[str, Any],
+        data_mount_path: str,
+    ) -> float:
+        import numpy as np
+        import torch
+        from mambasl_new.cmapss.model import configure_device
+        from mambasl_new.cmapss.train import train_model
+
+        from kfp_workflow.tune.exceptions import TrialPruned
+
+        # --- Data loading & preprocessing (cached across trials) ----------
+        cache_key = (
+            spec["dataset"].get("config", {}).get("fd_name", "FD001"),
+            int(params.get("window_size", 50)),
+            float(params.get("max_rul", 125.0)),
+        )
+        if not hasattr(self, "_hpo_cache") or self._hpo_cache_key != cache_key:
+            # Build a spec-dict that uses *this trial's* window_size/max_rul
+            trial_spec = {
+                **spec,
+                "model": {
+                    **spec.get("model", {}),
+                    "config": {
+                        **spec.get("model", {}).get("config", {}),
+                        "window_size": int(params.get("window_size", 50)),
+                        "max_rul": float(params.get("max_rul", 125.0)),
+                    },
+                },
+            }
+            load_result = self.load_data(trial_spec, data_mount_path)
+            import tempfile
+            artifacts_dir = tempfile.mkdtemp(prefix="hpo_trial_")
+            preprocess_result = self.preprocess(
+                trial_spec, load_result, artifacts_dir,
+            )
+            self._hpo_cache = {
+                "x_train": np.load(preprocess_result.x_train_path),
+                "y_train": np.load(preprocess_result.y_train_path),
+                "x_val": np.load(preprocess_result.x_val_path),
+                "y_val": np.load(preprocess_result.y_val_path),
+                "feature_dim": preprocess_result.feature_dim,
+            }
+            self._hpo_cache_key = cache_key
+
+        x_train = self._hpo_cache["x_train"]
+        y_train = self._hpo_cache["y_train"]
+        x_val = self._hpo_cache["x_val"]
+        y_val = self._hpo_cache["y_val"]
+
+        if len(x_train) < int(params.get("batch_size", 64)) or len(x_val) == 0:
+            raise TrialPruned()
+
+        # --- Device setup -------------------------------------------------
+        train_cfg = spec.get("train", {})
+        torch.set_num_threads(
+            spec.get("runtime", {}).get("torch_num_threads", 4)
+        )
+        device = configure_device(
+            prefer_gpu=spec.get("runtime", {}).get("use_gpu", False)
+        )
+
+        # --- Single-trial training ----------------------------------------
+        # Inject feature_dim into params so build_model can read c_in
+        trial_params = {**params, "c_in": self._hpo_cache["feature_dim"]}
+
+        _, _, _, _, best_metric = train_model(
+            trial_params,
+            x_train, y_train,
+            x_val, y_val,
+            max_epochs=train_cfg.get("max_epochs", 25),
+            patience=train_cfg.get("patience", 5),
+            selection_metric=train_cfg.get("selection_metric", "rmse"),
+            score_weight=train_cfg.get("score_weight", 0.01),
+            device=device,
+        )
+        return float(best_metric)

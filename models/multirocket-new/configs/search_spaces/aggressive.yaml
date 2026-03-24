@@ -1,0 +1,23 @@
+- name: mr_num_kernels
+  type: int
+  low: 84
+  high: 840
+  step: 84
+- name: n_kernels
+  type: int
+  low: 1
+  high: 6
+  step: 1
+- name: n_groups
+  type: int
+  low: 16
+  high: 160
+  step: 16
+- name: n_kernels_sp
+  type: int
+  low: 64
+  high: 640
+  step: 64
+- name: seed
+  type: categorical
+  values: [7, 13, 21, 42, 84]

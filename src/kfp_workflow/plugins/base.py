@@ -190,6 +190,67 @@ class ModelPlugin(ABC):
         """Copy model to final PVC path and register in model registry."""
         ...
 
+    # -- HPO hooks (optional) -----------------------------------------------
+
+    def hpo_search_space(
+        self,
+        spec: Dict[str, Any],
+        profile: str,
+    ) -> list:
+        """Return the search space for a builtin profile.
+
+        Must return a list of ``kfp_workflow.specs.SearchParamSpec``
+        instances.  Only called when the spec does not contain an
+        explicit ``hpo.search_space``; in that case *profile* is
+        ``"default"``, ``"aggressive"``, etc.
+        """
+        raise NotImplementedError(
+            f"Plugin '{self.name()}' does not provide HPO search spaces."
+        )
+
+    def hpo_base_config(self, spec: Dict[str, Any]) -> Dict[str, Any]:
+        """Return the fixed base config that search params override.
+
+        The returned dict contains all model / training parameters at
+        their default values.  During HPO the engine merges suggested
+        params on top of this base before calling ``hpo_objective``.
+        """
+        raise NotImplementedError(
+            f"Plugin '{self.name()}' does not provide an HPO base config."
+        )
+
+    def hpo_objective(
+        self,
+        spec: Dict[str, Any],
+        params: Dict[str, Any],
+        data_mount_path: str,
+    ) -> float:
+        """Run **one** HPO trial and return the objective metric value.
+
+        Parameters
+        ----------
+        spec:
+            Full ``TuneSpec`` as a plain dict.
+        params:
+            Candidate hyperparameter values (base_config merged with the
+            engine's suggested overrides).
+        data_mount_path:
+            Root path where data is accessible.
+
+        Returns
+        -------
+        float
+            Objective metric value (**lower is better**).
+
+        Raises
+        ------
+        kfp_workflow.tune.exceptions.TrialPruned
+            If the trial should be pruned.
+        """
+        raise NotImplementedError(
+            f"Plugin '{self.name()}' does not support HPO trials."
+        )
+
     # -- Inference ----------------------------------------------------------
 
     # -- Config schema hooks (optional) ------------------------------------

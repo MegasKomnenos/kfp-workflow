@@ -1,0 +1,61 @@
+metadata:
+  name: multirocket-new-fd-all-aggressive
+  description: Aggressive four-dataset Kubeflow and Katib workflow
+runtime:
+  namespace: kubeflow-user-example-com
+  pipeline_root: s3://mlpipeline/multirocket-new/fd-all-aggressive
+  image: multirocket-new:latest
+  image_pull_policy: IfNotPresent
+  service_account: default-editor
+  resources:
+    cpu_request: "4"
+    cpu_limit: "8"
+    memory_request: 8Gi
+    memory_limit: 16Gi
+    gpu_request: "0"
+    gpu_limit: "0"
+storage:
+  mode: pvc
+  data_pvc: cmapss-data
+  results_pvc: cmapss-results
+  storage_class: local-path
+  data_size: 8Gi
+  results_size: 32Gi
+  data_mount_path: /mnt/data
+  results_mount_path: /mnt/results
+datasets:
+  items: [FD001, FD002, FD003, FD004]
+stages: [hpo, final_train_eval, ablation_sweep, aggregate_reports]
+train_defaults:
+  seed: 42
+  feature_mode: selected_sensors
+  scaling_mode: global
+  seq_len: 60
+  train_stride: 1
+  max_rul: 125
+  val_frac: 0.2
+  val_mode: sampled_last
+  val_samples_per_unit: 12
+  n_jobs: 4
+  predict_batch_size: 512
+  selection_metric: hybrid
+  score_weight: 0.01
+  fixed_params:
+    mr_num_kernels: 168
+    n_kernels: 2
+    n_groups: 64
+    n_kernels_sp: 256
+hpo:
+  enabled: true
+  builtin_profile: aggressive
+  algorithm: random
+  max_trial_count: 16
+  parallel_trial_count: 4
+  max_failed_trial_count: 4
+ablations:
+  enabled: true
+  axes:
+    seed: [7, 21, 42]
+    seq_len: [50, 60]
+outputs:
+  local_results_dir: results

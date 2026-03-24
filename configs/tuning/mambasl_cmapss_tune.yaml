@@ -1,0 +1,47 @@
+metadata:
+  name: mambasl-cmapss-hpo
+  description: MambaSL C-MAPSS FD001 hyperparameter optimisation
+  version: v1
+
+runtime:
+  namespace: kubeflow-user-example-com
+  image: kfp-workflow:latest
+  use_gpu: false
+  torch_num_threads: 4
+  resources:
+    cpu_request: "4"
+    memory_request: 16Gi
+
+storage:
+  data_pvc: dataset-store
+  model_pvc: model-store
+  data_mount_path: /mnt/data
+  model_mount_path: /mnt/models
+
+model:
+  name: mambasl-cmapss
+  version: v1
+  config: {}                   # base config populated by plugin's hpo_base_config()
+
+dataset:
+  name: cmapss
+  version: v1
+  config:
+    fd_name: FD001
+    feature_mode: settings_plus_sensors
+    norm_mode: condition_minmax
+
+train:
+  seed: 42
+  max_epochs: 25               # reduced for HPO trials
+  patience: 5
+  selection_metric: rmse
+  score_weight: 0.01
+
+hpo:
+  algorithm: tpe                # tpe | random | grid
+  max_trials: 20
+  max_failed_trials: 3
+  parallel_trials: 1
+  builtin_profile: default      # default | aggressive | custom
+  # search_space: []            # empty = use builtin_profile from plugin

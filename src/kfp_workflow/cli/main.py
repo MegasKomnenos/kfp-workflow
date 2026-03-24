@@ -46,6 +46,7 @@ model_reg_app = typer.Typer(help="Model registry operations.")
 dataset_reg_app = typer.Typer(help="Dataset registry operations.")
 cluster_app = typer.Typer(help="Cluster bootstrapping operations.")
 spec_app = typer.Typer(help="Spec validation.")
+tune_app = typer.Typer(help="Hyperparameter tuning operations.")
 
 app.add_typer(pipeline_app, name="pipeline")
 pipeline_app.add_typer(run_app, name="run")
@@ -56,6 +57,7 @@ registry_app.add_typer(model_reg_app, name="model")
 registry_app.add_typer(dataset_reg_app, name="dataset")
 app.add_typer(cluster_app, name="cluster")
 app.add_typer(spec_app, name="spec")
+app.add_typer(tune_app, name="tune")
 
 
 @app.callback()
@@ -97,6 +99,9 @@ def cmd_spec_validate(
                 typer.echo(f"Warning: {w}", err=True)
     elif spec_type == "serving":
         loaded = load_serving_spec(spec)
+    elif spec_type == "tune":
+        from kfp_workflow.specs import load_tune_spec_with_overrides
+        loaded = load_tune_spec_with_overrides(spec, set_values or None)
     else:
         typer.echo(f"Unknown spec type: {spec_type}", err=True)
         raise typer.Exit(code=1)
@@ -793,6 +798,156 @@ def cmd_cluster_bootstrap(
         typer.echo(f"Applied {manifest['kind']} '{manifest['metadata']['name']}'")
 
     typer.echo("Cluster bootstrap complete.")
+
+
+# ---------------------------------------------------------------------------
+# tune commands
+# ---------------------------------------------------------------------------
+
+@tune_app.command("run")
+def cmd_tune_run(
+    spec: Path = typer.Option(..., help="Path to a tune YAML spec."),
+    set_values: List[str] = typer.Option(
+        [], "--set",
+        help="Override spec values (e.g., --set hpo.algorithm=tpe).",
+    ),
+    data_mount_path: Optional[str] = typer.Option(
+        None, help="Override data mount path (default: from spec).",
+    ),
+    output: Optional[Path] = typer.Option(
+        None, help="Write best params JSON to this file.",
+    ),
+) -> None:
+    """Run local hyperparameter optimisation using Optuna."""
+    from kfp_workflow.plugins import get_plugin
+    from kfp_workflow.specs import load_tune_spec_with_overrides
+    from kfp_workflow.tune.engine import run_hpo
+
+    loaded = load_tune_spec_with_overrides(spec, set_values or None)
+    plugin = get_plugin(loaded.model.name)
+    mount = data_mount_path or loaded.storage.data_mount_path
+
+    result = run_hpo(plugin, loaded, mount)
+
+    if output:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(result.model_dump(), indent=2, default=str))
+        typer.echo(f"Results written to {output}")
+
+    if _json_output:
+        from kfp_workflow.cli.output import print_json
+        print_json(result.model_dump())
+    else:
+        from kfp_workflow.cli.output import print_kv
+        print_kv([
+            ("Best value", f"{result.best_value:.4f}"),
+            ("Trials", f"{result.n_completed}/{result.n_trials} completed"),
+            ("Pruned", str(result.n_pruned)),
+            ("Failed", str(result.n_failed)),
+            ("Wall time", f"{result.wall_time_seconds:.1f}s"),
+        ])
+        typer.echo("\nBest parameters:")
+        typer.echo(json.dumps(result.best_params, indent=2, default=str))
+
+
+@tune_app.command("katib")
+def cmd_tune_katib(
+    spec: Path = typer.Option(..., help="Path to a tune YAML spec."),
+    set_values: List[str] = typer.Option(
+        [], "--set",
+        help="Override spec values (e.g., --set hpo.max_trials=30).",
+    ),
+    output: Optional[Path] = typer.Option(
+        None, help="Write Katib manifest YAML to this file.",
+    ),
+    dry_run: bool = typer.Option(
+        False, help="Print manifest without applying to the cluster.",
+    ),
+) -> None:
+    """Generate or apply a Katib Experiment manifest for distributed HPO."""
+    import yaml as pyyaml
+
+    from kfp_workflow.plugins import get_plugin
+    from kfp_workflow.specs import load_tune_spec_with_overrides
+    from kfp_workflow.tune.engine import resolve_search_space
+    from kfp_workflow.tune.katib import build_katib_experiment
+
+    loaded = load_tune_spec_with_overrides(spec, set_values or None)
+    plugin = get_plugin(loaded.model.name)
+    search_space = resolve_search_space(plugin, loaded.model_dump())
+
+    trial_command = [
+        "python", "-m", "kfp_workflow.cli.main",
+        "pipeline", "submit",
+        "--spec", "/mnt/config/spec.yaml",
+    ]
+    manifest = build_katib_experiment(
+        loaded,
+        search_space,
+        trial_image=loaded.runtime.image,
+        trial_command=trial_command,
+    )
+
+    manifest_yaml = pyyaml.dump(manifest, default_flow_style=False, sort_keys=False)
+
+    if output:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(manifest_yaml)
+        typer.echo(f"Katib manifest written to {output}")
+
+    if dry_run or _json_output:
+        if _json_output:
+            from kfp_workflow.cli.output import print_json
+            print_json(manifest)
+        else:
+            typer.echo(manifest_yaml)
+        if dry_run:
+            return
+
+    subprocess.run(
+        ["kubectl", "apply", "-f", "-"],
+        check=True, text=True, input=json.dumps(manifest),
+    )
+    typer.echo(
+        f"Katib experiment '{loaded.metadata.name}' submitted "
+        f"to namespace '{loaded.runtime.namespace}'."
+    )
+
+
+@tune_app.command("show-space")
+def cmd_tune_show_space(
+    spec: Path = typer.Option(..., help="Path to a tune YAML spec."),
+    set_values: List[str] = typer.Option(
+        [], "--set",
+        help="Override spec values (e.g., --set hpo.builtin_profile=aggressive).",
+    ),
+) -> None:
+    """Display the resolved search space for a tune spec."""
+    from kfp_workflow.cli.output import print_json, print_table
+    from kfp_workflow.plugins import get_plugin
+    from kfp_workflow.specs import load_tune_spec_with_overrides
+    from kfp_workflow.tune.engine import resolve_search_space
+
+    loaded = load_tune_spec_with_overrides(spec, set_values or None)
+    plugin = get_plugin(loaded.model.name)
+    space = resolve_search_space(plugin, loaded.model_dump())
+
+    if _json_output:
+        print_json([p.model_dump() for p in space])
+        return
+
+    rows = []
+    for p in space:
+        if p.type == "categorical":
+            detail = ", ".join(str(v) for v in (p.values or []))
+        else:
+            detail = f"[{p.low}, {p.high}]"
+            if p.step:
+                detail += f" step={p.step}"
+            if p.type == "log_float":
+                detail += " (log)"
+        rows.append((p.name, p.type, detail))
+    print_table("Search Space", ["NAME", "TYPE", "RANGE / VALUES"], rows)
 
 
 # ---------------------------------------------------------------------------

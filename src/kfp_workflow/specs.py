@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from kfp_workflow.utils import load_yaml
 
@@ -101,6 +101,80 @@ class PipelineSpec(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Hyperparameter tuning spec
+# ---------------------------------------------------------------------------
+
+SearchParamType = Literal["categorical", "int", "float", "log_float"]
+
+
+class SearchParamSpec(BaseModel):
+    """A single hyperparameter search dimension."""
+
+    name: str
+    type: SearchParamType
+    values: Optional[List[Any]] = None
+    low: Optional[float] = None
+    high: Optional[float] = None
+    step: Optional[float] = None
+
+    @model_validator(mode="after")
+    def _validate_shape(self) -> "SearchParamSpec":
+        if self.type == "categorical" and not self.values:
+            raise ValueError("categorical param requires 'values'")
+        if self.type in {"int", "float", "log_float"} and (
+            self.low is None or self.high is None
+        ):
+            raise ValueError(f"{self.type} param requires 'low' and 'high'")
+        return self
+
+
+class HpoSpec(BaseModel):
+    """Hyperparameter optimisation configuration."""
+
+    algorithm: Literal["random", "tpe", "grid"] = "tpe"
+    max_trials: int = 20
+    max_failed_trials: int = 3
+    parallel_trials: int = 1
+    builtin_profile: Literal["default", "aggressive", "custom"] = "default"
+    search_space: List[SearchParamSpec] = Field(default_factory=list)
+
+
+class TuneSpec(BaseModel):
+    """Top-level spec for a hyperparameter tuning run."""
+
+    metadata: MetadataSpec
+    runtime: RuntimeSpec
+    storage: StorageSpec = Field(default_factory=StorageSpec)
+    model: ModelRef
+    dataset: DatasetRef
+    train: TrainSpec = Field(default_factory=TrainSpec)
+    hpo: HpoSpec = Field(default_factory=HpoSpec)
+
+
+class HpoTrialResult(BaseModel):
+    """Result of a single HPO trial."""
+
+    trial_number: int
+    params: Dict[str, Any]
+    objective_value: float
+    status: Literal["completed", "pruned", "failed"]
+    user_attrs: Dict[str, Any] = Field(default_factory=dict)
+
+
+class HpoResult(BaseModel):
+    """Aggregated result of an HPO run."""
+
+    best_params: Dict[str, Any]
+    best_value: float
+    n_trials: int
+    n_completed: int
+    n_pruned: int
+    n_failed: int
+    trials: List[HpoTrialResult] = Field(default_factory=list)
+    wall_time_seconds: float = 0.0
+
+
+# ---------------------------------------------------------------------------
 # Serving spec
 # ---------------------------------------------------------------------------
 
@@ -147,3 +221,20 @@ def load_pipeline_spec_with_overrides(
 def load_serving_spec(path: str | Path) -> ServingSpec:
     """Load and validate a serving spec from a YAML file."""
     return ServingSpec.model_validate(load_yaml(Path(path)))
+
+
+def load_tune_spec(path: str | Path) -> TuneSpec:
+    """Load and validate a tuning spec from a YAML file."""
+    return TuneSpec.model_validate(load_yaml(Path(path)))
+
+
+def load_tune_spec_with_overrides(
+    path: str | Path,
+    overrides: list[str] | None = None,
+) -> TuneSpec:
+    """Load a tuning spec from YAML, apply CLI overrides, then validate."""
+    raw = load_yaml(Path(path))
+    if overrides:
+        from kfp_workflow.config_override import apply_overrides
+        raw = apply_overrides(raw, overrides)
+    return TuneSpec.model_validate(raw)

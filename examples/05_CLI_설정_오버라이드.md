@@ -93,7 +93,7 @@ runtime:
 
 ## 지원하는 명령어
 
-`--set` 플래그는 다음 세 가지 명령어에서 사용할 수 있습니다:
+`--set` 플래그는 다음 명령어들에서 사용할 수 있습니다:
 
 ### 1. `pipeline compile`
 
@@ -128,6 +128,41 @@ kfp-workflow spec validate \
 ```
 
 오버라이드가 적용된 상태의 스펙을 검증합니다. 실제 제출 전에 설정이 유효한지 확인하는 용도로 유용합니다.
+
+### 4. `tune run`
+
+```bash
+kfp-workflow tune run \
+    --spec configs/tuning/mambasl_cmapss_tune.yaml \
+    --set hpo.algorithm=tpe \
+    --set hpo.max_trials=10 \
+    --set train.max_epochs=50 \
+    --data-mount-path ./data
+```
+
+HPO 실행 시 튜닝 스펙의 모든 필드를 오버라이드할 수 있습니다. `hpo.*` 경로로 알고리즘, 시행 횟수 등을 변경하고, `train.*`이나 `model.config.*` 경로로 기본 학습 설정을 변경합니다.
+
+### 5. `tune katib`
+
+```bash
+kfp-workflow tune katib \
+    --spec configs/tuning/mambasl_cmapss_tune.yaml \
+    --set hpo.max_trials=50 \
+    --set hpo.parallel_trials=4 \
+    --dry-run
+```
+
+Katib 매니페스트 생성 시에도 동일한 오버라이드가 적용됩니다.
+
+### 6. `tune show-space`
+
+```bash
+kfp-workflow tune show-space \
+    --spec configs/tuning/mambasl_cmapss_tune.yaml \
+    --set hpo.builtin_profile=aggressive
+```
+
+탐색 공간 미리보기 시 프로파일을 변경하여 다른 탐색 공간을 확인할 수 있습니다.
 
 ## 플러그인 Config 스키마 검증
 
