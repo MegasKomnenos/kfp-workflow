@@ -25,9 +25,9 @@ COPY src /workspace/src
 COPY configs /workspace/configs
 RUN pip install ".[serving]"
 
-# Install mambasl-new as co-located package
-COPY mambasl-new/pyproject.toml mambasl-new/README.md /workspace/mambasl-new/
-COPY mambasl-new/src /workspace/mambasl-new/src
+# Install mambasl-new model package
+COPY models/mambasl-new/pyproject.toml models/mambasl-new/README.md /workspace/mambasl-new/
+COPY models/mambasl-new/src /workspace/mambasl-new/src
 RUN pip install ./mambasl-new
 
 ENTRYPOINT ["python", "-m", "kfp_workflow.cli.main"]
