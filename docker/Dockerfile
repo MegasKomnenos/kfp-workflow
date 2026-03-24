@@ -30,4 +30,9 @@ COPY models/mambasl-new/pyproject.toml models/mambasl-new/README.md /workspace/m
 COPY models/mambasl-new/src /workspace/mambasl-new/src
 RUN pip install ./mambasl-new
 
+# Install multirocket-new model package
+COPY models/multirocket-new/pyproject.toml models/multirocket-new/README.md /workspace/multirocket-new/
+COPY models/multirocket-new/src /workspace/multirocket-new/src
+RUN pip install ./multirocket-new
+
 ENTRYPOINT ["python", "-m", "kfp_workflow.cli.main"]

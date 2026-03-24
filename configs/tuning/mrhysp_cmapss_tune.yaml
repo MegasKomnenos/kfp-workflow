@@ -1,0 +1,44 @@
+metadata:
+  name: mrhysp-cmapss-hpo
+  description: MR-HY-SP C-MAPSS FD001 hyperparameter optimisation
+  version: v1
+
+runtime:
+  namespace: kubeflow-user-example-com
+  image: kfp-workflow:latest
+  use_gpu: false
+  resources:
+    cpu_request: "4"
+    memory_request: 16Gi
+
+storage:
+  data_pvc: dataset-store
+  model_pvc: model-store
+  data_mount_path: /mnt/data
+  model_mount_path: /mnt/models
+
+model:
+  name: mrhysp-cmapss
+  version: v1
+  config: {}                   # base config populated by plugin's hpo_base_config()
+
+dataset:
+  name: cmapss
+  version: v1
+  config:
+    fd_name: FD001
+    feature_mode: selected
+    scaling_mode: condition
+
+train:
+  seed: 42
+  val_split: 0.2
+  selection_metric: rmse
+
+hpo:
+  algorithm: tpe                # tpe | random | grid
+  max_trials: 20
+  max_failed_trials: 3
+  parallel_trials: 1
+  builtin_profile: default      # default | aggressive | custom
+  # search_space: []            # empty = use builtin_profile from plugin

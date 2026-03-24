@@ -29,8 +29,15 @@ python -m pytest tests/ -v
 
 ### Validate a spec
 ```bash
+# MambaSL
 kfp-workflow spec validate --spec configs/pipelines/mambasl_cmapss_smoke.yaml
 kfp-workflow spec validate --spec configs/serving/mambasl_cmapss_serve.yaml --type serving
+kfp-workflow spec validate --spec configs/tuning/mambasl_cmapss_tune.yaml --type tune
+
+# MR-HY-SP
+kfp-workflow spec validate --spec configs/pipelines/mrhysp_cmapss_smoke.yaml
+kfp-workflow spec validate --spec configs/serving/mrhysp_cmapss_serve.yaml --type serving
+kfp-workflow spec validate --spec configs/tuning/mrhysp_cmapss_tune.yaml --type tune
 ```
 
 ### Compile a pipeline
@@ -38,6 +45,37 @@ kfp-workflow spec validate --spec configs/serving/mambasl_cmapss_serve.yaml --ty
 kfp-workflow pipeline compile \
   --spec configs/pipelines/mambasl_cmapss_smoke.yaml \
   --output pipelines/mambasl_cmapss_smoke.yaml
+```
+
+### Hyperparameter tuning
+```bash
+# Preview the search space for a tuning spec
+kfp-workflow tune show-space --spec configs/tuning/mambasl_cmapss_tune.yaml
+
+# Use the aggressive profile
+kfp-workflow tune show-space --spec configs/tuning/mambasl_cmapss_tune.yaml \
+  --set hpo.builtin_profile=aggressive
+
+# Run local HPO (Optuna)
+kfp-workflow tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
+  --set hpo.max_trials=20 --set hpo.algorithm=tpe \
+  --data-mount-path ./data \
+  --output results/best_params.json
+
+# Quick smoke test (2 trials, 2 epochs)
+kfp-workflow tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
+  --set hpo.max_trials=2 --set train.max_epochs=2 \
+  --data-mount-path ./data
+
+# Generate Katib manifest for distributed HPO
+kfp-workflow tune katib --spec configs/tuning/mambasl_cmapss_tune.yaml --dry-run
+
+# Submit Katib experiment to cluster
+kfp-workflow tune katib --spec configs/tuning/mambasl_cmapss_tune.yaml
+
+# JSON output for scripting
+kfp-workflow --json tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
+  --set hpo.max_trials=5 --data-mount-path ./data
 ```
 
 ## Docker Build
@@ -54,6 +92,50 @@ The Dockerfile installs:
 1. `mamba_ssm` from pre-built GitHub wheel (CPU fallback via `selective_scan_ref`)
 2. `kfp-workflow[serving]` (main package + kserve SDK)
 3. `mambasl-new` (ML model package from `models/mambasl-new/`)
+4. `multirocket-new` (ML model package from `models/multirocket-new/`)
+
+## End-to-End Deployment (MR-HY-SP C-MAPSS Smoke Test)
+
+### 1. Build and import Docker image
+```bash
+docker build -t kfp-workflow:latest -f docker/Dockerfile .
+docker save kfp-workflow:latest | sudo ctr -n k8s.io images import -
+```
+
+### 2. Bootstrap cluster storage
+```bash
+kfp-workflow cluster bootstrap \
+  --spec configs/pipelines/mrhysp_cmapss_smoke.yaml
+```
+
+### 3. Compile and submit pipeline
+```bash
+kfp-workflow pipeline compile \
+  --spec configs/pipelines/mrhysp_cmapss_smoke.yaml \
+  --output pipelines/mrhysp_cmapss_smoke.yaml
+
+kfp-workflow pipeline submit \
+  --spec configs/pipelines/mrhysp_cmapss_smoke.yaml
+```
+
+### 4. Hyperparameter tuning
+```bash
+# Preview search space
+kfp-workflow tune show-space --spec configs/tuning/mrhysp_cmapss_tune.yaml
+
+# Run local HPO (Optuna)
+kfp-workflow tune run --spec configs/tuning/mrhysp_cmapss_tune.yaml \
+  --set hpo.max_trials=10 --data-mount-path ./data
+
+# Generate Katib manifest
+kfp-workflow tune katib --spec configs/tuning/mrhysp_cmapss_tune.yaml --dry-run
+```
+
+### 5. Deploy serving
+```bash
+kfp-workflow serve create --spec configs/serving/mrhysp_cmapss_serve.yaml
+kfp-workflow serve get --name mrhysp-cmapss-serving
+```
 
 ## End-to-End Deployment (MambaSL C-MAPSS Smoke Test)
 
@@ -297,7 +379,9 @@ UFW rules allow pod network (10.244.0.0/16) to reach hostNetwork services:
 
 1. Create `src/kfp_workflow/plugins/my_model.py` implementing `ModelPlugin` ABC
 2. Implement: `name()`, `load_data()`, `preprocess()`, `train()`, `evaluate()`, `save_model()`, `predict()`
-3. Add import to `_build_registry()` in `src/kfp_workflow/plugins/__init__.py`
-4. Create pipeline config in `configs/pipelines/` with `model.name: my-model`
-5. Create serving config in `configs/serving/` with `model_name: my-model`
-6. Update Docker image to include any new dependencies
+3. (Optional) Implement HPO hooks: `hpo_search_space()`, `hpo_base_config()`, `hpo_objective()`
+4. Add import to `_build_registry()` in `src/kfp_workflow/plugins/__init__.py`
+5. Create pipeline config in `configs/pipelines/` with `model.name: my-model`
+6. Create tuning config in `configs/tuning/` with `model.name: my-model` (if HPO supported)
+7. Create serving config in `configs/serving/` with `model_name: my-model`
+8. Update Docker image to include any new dependencies

@@ -13,13 +13,18 @@ test/
 ├── configs/
 │   ├── pipelines/
 │   │   ├── sample_train.yaml          # Example training pipeline spec
-│   │   └── mambasl_cmapss_smoke.yaml  # MambaSL C-MAPSS smoke test (2 epochs, CPU)
+│   │   ├── mambasl_cmapss_smoke.yaml  # MambaSL C-MAPSS smoke test (2 epochs, CPU)
+│   │   └── mrhysp_cmapss_smoke.yaml   # MR-HY-SP C-MAPSS smoke test (minimal kernels, CPU)
+│   ├── tuning/
+│   │   ├── mambasl_cmapss_tune.yaml   # MambaSL C-MAPSS HPO tuning spec
+│   │   └── mrhysp_cmapss_tune.yaml    # MR-HY-SP C-MAPSS HPO tuning spec
 │   └── serving/
 │       ├── sample_serve.yaml          # Example KServe serving spec
-│       └── mambasl_cmapss_serve.yaml  # MambaSL C-MAPSS custom predictor spec
+│       ├── mambasl_cmapss_serve.yaml  # MambaSL C-MAPSS custom predictor spec
+│       └── mrhysp_cmapss_serve.yaml   # MR-HY-SP C-MAPSS custom predictor spec
 │
 ├── docker/
-│   └── Dockerfile                     # Base image (PyTorch + CUDA + mamba_ssm + mambasl-new)
+│   └── Dockerfile                     # Base image (PyTorch + CUDA + mamba_ssm + mambasl-new + multirocket-new)
 │
 ├── examples/                          # Korean-language tutorials and usage guides
 │   ├── README.md                      # Table of contents and learning order
@@ -33,7 +38,8 @@ test/
 │   ├── 07_레지스트리_관리.md          # Model and dataset registry management
 │   ├── 08_클러스터_부트스트랩.md       # PVC provisioning via cluster bootstrap
 │   ├── 09_Docker_이미지_빌드.md       # Docker image build and optimization
-│   └── 10_새_모델_플러그인_개발.md    # ModelPlugin ABC implementation guide
+│   ├── 10_새_모델_플러그인_개발.md    # ModelPlugin ABC full implementation guide (architecture, stages, serving, HPO, testing)
+│   └── 11_하이퍼파라미터_튜닝.md     # Optuna/Katib HPO execution and management
 │
 ├── kubeflow/
 │   └── pvc/
@@ -41,12 +47,18 @@ test/
 │       └── model-pvc.yaml             # Model weights PVC manifest
 │
 ├── models/
-│   └── mambasl-new/                   # MambaSL model package (installed in Docker image)
-│       └── src/mambasl_new/
-│           ├── cmapss/                # C-MAPSS data, preprocessing, model, training
-│           ├── mamba_layers/          # Mamba_TimeVariant, PositionalEmbedding
-│           ├── kubeflow/              # Katib manifest construction, HPO pipeline
-│           └── cli/                   # Container-internal CLI (train, katib-trial)
+│   ├── mambasl-new/                   # MambaSL model package (installed in Docker image)
+│   │   └── src/mambasl_new/
+│   │       ├── cmapss/                # C-MAPSS data, preprocessing, model, training
+│   │       ├── mamba_layers/          # Mamba_TimeVariant, PositionalEmbedding
+│   │       ├── kubeflow/              # Katib manifest construction, HPO pipeline
+│   │       └── cli/                   # Container-internal CLI (train, katib-trial)
+│   └── multirocket-new/              # MR-HY-SP model package (installed in Docker image)
+│       └── src/multirocket_new/
+│           ├── cmapss.py              # C-MAPSS data loading, windowing, scaling
+│           ├── model.py               # MRHySPRegressor (HYDRA + MultiRocket + SPRocket + RidgeCV)
+│           ├── runner.py              # Experiment runner, metrics, batch prediction
+│           └── config.py              # ExperimentConfig, mr_num_kernels constraint
 │
 ├── pipelines/
 │   └── README.md                      # Compiled YAML output (git-ignored)
@@ -57,10 +69,10 @@ test/
 ├── src/kfp_workflow/
 │   ├── __init__.py                    # Package root, __version__
 │   ├── config_override.py             # CLI --set override utilities (coerce, merge, validate)
-│   ├── specs.py                       # Pydantic config models (PipelineSpec, ServingSpec)
+│   ├── specs.py                       # Pydantic config models (PipelineSpec, ServingSpec, TuneSpec)
 │   ├── utils.py                       # YAML/JSON I/O helpers
 │   ├── cli/
-│   │   ├── main.py                    # Typer CLI (pipeline, serve, registry, cluster, spec)
+│   │   ├── main.py                    # Typer CLI (pipeline, serve, registry, cluster, spec, tune)
 │   │   └── output.py                  # Rich-based structured output (tables, colors, JSON)
 │   ├── components/
 │   │   ├── __init__.py                # Re-exports all 5 component functions
@@ -75,8 +87,14 @@ test/
 │   │   └── connection.py              # Reusable kfp_connection() context manager
 │   ├── plugins/
 │   │   ├── __init__.py                # Plugin registry dict + get_plugin()
-│   │   ├── base.py                    # ModelPlugin ABC + result dataclasses
-│   │   └── mambasl_cmapss.py          # MambaSL C-MAPSS adapter plugin
+│   │   ├── base.py                    # ModelPlugin ABC + result dataclasses + HPO contract
+│   │   ├── mambasl_cmapss.py          # MambaSL C-MAPSS adapter plugin (incl. HPO)
+│   │   └── mrhysp_cmapss.py           # MR-HY-SP C-MAPSS adapter plugin (incl. HPO)
+│   ├── tune/
+│   │   ├── __init__.py
+│   │   ├── exceptions.py              # TrialPruned exception (project-level, no Optuna leak)
+│   │   ├── engine.py                  # Optuna HPO engine (study, trial loop, suggest)
+│   │   └── katib.py                   # Katib Experiment CRD manifest builder
 │   ├── registry/
 │   │   ├── base.py                    # ABCs: ModelRegistryBase, DatasetRegistryBase
 │   │   ├── model_registry.py          # FileModelRegistry (JSON on PVC)

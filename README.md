@@ -19,6 +19,8 @@ Models are integrated via a **modular plugin system**. Each model implements the
 load_data → preprocess → train → evaluate → save_model → predict
 ```
 
+Plugins can optionally implement HPO hooks (`hpo_search_space`, `hpo_base_config`, `hpo_objective`) to enable hyperparameter tuning via the project-owned Optuna engine.
+
 Plugins are discovered via an explicit registry dict in `plugins/__init__.py`. To add a new model:
 
 1. Create `plugins/my_model.py` implementing `ModelPlugin`
@@ -26,7 +28,8 @@ Plugins are discovered via an explicit registry dict in `plugins/__init__.py`. T
 3. Reference it by name in pipeline spec: `model.name: my-model`
 
 **Current plugins:**
-- `mambasl-cmapss` — MambaSL state-space model for C-MAPSS turbofan RUL prediction
+- `mambasl-cmapss` — MambaSL state-space model for C-MAPSS turbofan RUL prediction (PyTorch)
+- `mrhysp-cmapss` — MR-HY-SP ensemble (MultiRocket + HYDRA + SPRocket + RidgeCV) for C-MAPSS turbofan RUL prediction (sklearn/aeon)
 
 ## Quick Start
 
@@ -71,9 +74,14 @@ kfp-workflow registry dataset register  --name <n> --pvc-name <p> --subpath <s> 
 kfp-workflow registry dataset get       --name <n> [--version] [--registry-path]
 kfp-workflow registry dataset list      [--registry-path]
 
+# Hyperparameter tuning
+kfp-workflow tune run            --spec <path> [--set key=value ...] [--data-mount-path] [--output]
+kfp-workflow tune katib          --spec <path> [--set key=value ...] [--dry-run] [--output]
+kfp-workflow tune show-space     --spec <path> [--set key=value ...]
+
 # Infrastructure
 kfp-workflow cluster bootstrap  --spec <path> [--dry-run]
-kfp-workflow spec validate      --spec <path> [--type {pipeline,serving}] [--set key=value ...]
+kfp-workflow spec validate      --spec <path> [--type {pipeline,serving,tune}] [--set key=value ...]
 ```
 
 ## Pipeline DAG
@@ -86,8 +94,9 @@ All components receive a serialised `PipelineSpec` JSON and communicate via JSON
 
 ## Configuration
 
-Pipeline and serving behaviour is driven by YAML specs under `configs/`:
+Pipeline, serving, and tuning behaviour is driven by YAML specs under `configs/`:
 - `configs/pipelines/` — Training pipeline specs (validated as `PipelineSpec`)
+- `configs/tuning/` — HPO tuning specs (validated as `TuneSpec`)
 - `configs/serving/` — Serving specs (validated as `ServingSpec`)
 
 ### Spec Fields
@@ -125,6 +134,28 @@ kfp-workflow pipeline compile --spec configs/pipelines/mambasl_cmapss_smoke.yaml
 
 **Precedence:** CLI `--set` > YAML spec > plugin defaults.
 
+### Hyperparameter Tuning
+
+The project owns the HPO orchestration engine (Optuna-based). Plugins provide search spaces and single-trial objective functions; the engine handles study creation, parameter suggestion, and result aggregation.
+
+**TuneSpec** extends `PipelineSpec` with an `hpo` section:
+- `hpo.algorithm` — `tpe`, `random`, or `grid`
+- `hpo.max_trials` — Maximum number of trials
+- `hpo.builtin_profile` — `default` or `aggressive` (plugin-provided search spaces)
+- `hpo.search_space` — Custom search space (overrides builtin profile)
+
+```bash
+# Preview the resolved search space
+kfp-workflow tune show-space --spec configs/tuning/mambasl_cmapss_tune.yaml
+
+# Run local HPO with Optuna
+kfp-workflow tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
+    --set hpo.algorithm=tpe --set hpo.max_trials=20
+
+# Generate Katib manifest for distributed HPO
+kfp-workflow tune katib --spec configs/tuning/mambasl_cmapss_tune.yaml --dry-run
+```
+
 Values are auto-coerced: `128` → int, `0.001` → float, `true`/`false` → bool, `[1,2,3]` → list.
 
 ## Container Image
@@ -138,7 +169,7 @@ make docker-build
 ```
 
 Base: `pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime`
-Includes: `mamba_ssm` (pre-built wheel), `mambasl-new` package (from `models/mambasl-new/`), `kserve` SDK
+Includes: `mamba_ssm` (pre-built wheel), `mambasl-new` (from `models/mambasl-new/`), `multirocket-new` (from `models/multirocket-new/`), `kserve` SDK
 
 ## Cluster Monitoring
 

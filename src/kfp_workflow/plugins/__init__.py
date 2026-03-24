@@ -26,6 +26,10 @@ def _build_registry() -> Dict[str, Type[ModelPlugin]]:
     from kfp_workflow.plugins.mambasl_cmapss import MambaSLCmapssPlugin
     registry[MambaSLCmapssPlugin.name()] = MambaSLCmapssPlugin
 
+    # --- MR-HY-SP C-MAPSS ---
+    from kfp_workflow.plugins.mrhysp_cmapss import MRHySPCmapssPlugin
+    registry[MRHySPCmapssPlugin.name()] = MRHySPCmapssPlugin
+
     # --- Add future model plugins here ---
     # from kfp_workflow.plugins.some_other import SomeOtherPlugin
     # registry[SomeOtherPlugin.name()] = SomeOtherPlugin

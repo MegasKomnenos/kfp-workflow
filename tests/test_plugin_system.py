@@ -132,3 +132,73 @@ def test_build_cfg_defaults():
     assert cfg["batch_size"] == 64
     assert cfg["lr"] == 1e-3
     assert cfg["max_rul"] == 125.0
+
+
+# ---------------------------------------------------------------------------
+# MR-HY-SP C-MAPSS plugin tests
+# ---------------------------------------------------------------------------
+
+def test_plugin_registry_contains_mrhysp():
+    registry = get_plugin_registry()
+    assert "mrhysp-cmapss" in registry
+
+
+def test_get_mrhysp_plugin_returns_instance():
+    plugin = get_plugin("mrhysp-cmapss")
+    assert isinstance(plugin, ModelPlugin)
+    assert plugin.name() == "mrhysp-cmapss"
+
+
+def test_mrhysp_build_cfg_merges_config():
+    """Test that _build_cfg merges model config with train params."""
+    from kfp_workflow.plugins.mrhysp_cmapss import _build_cfg
+
+    spec = {
+        "model": {
+            "name": "mrhysp-cmapss",
+            "config": {"mr_num_kernels": 168, "n_kernels": 2, "n_groups": 64},
+        },
+        "train": {
+            "seed": 7,
+            "val_split": 0.3,
+        },
+    }
+    cfg = _build_cfg(spec)
+    # Explicit values from config
+    assert cfg["mr_num_kernels"] == 168
+    assert cfg["n_kernels"] == 2
+    assert cfg["n_groups"] == 64
+    # Mapped from train
+    assert cfg["seed"] == 7
+    assert cfg["val_frac"] == 0.3
+    # Defaults
+    assert cfg["n_kernels_sp"] == 128
+    assert cfg["seq_len"] == 50
+    assert cfg["max_rul"] == 125
+
+
+def test_mrhysp_build_cfg_defaults():
+    """Test _build_cfg with minimal spec gives sensible defaults."""
+    from kfp_workflow.plugins.mrhysp_cmapss import _build_cfg
+
+    spec = {"model": {}, "train": {}}
+    cfg = _build_cfg(spec)
+    assert cfg["mr_num_kernels"] == 84
+    assert cfg["n_kernels"] == 1
+    assert cfg["n_groups"] == 32
+    assert cfg["n_kernels_sp"] == 128
+    assert cfg["seed"] == 42
+    assert cfg["val_frac"] == 0.2
+    assert cfg["max_rul"] == 125
+
+
+def test_mrhysp_build_cfg_enforces_mr_num_kernels_multiple():
+    """Test that mr_num_kernels is rounded down to nearest multiple of 84."""
+    from kfp_workflow.plugins.mrhysp_cmapss import _build_cfg
+
+    spec = {
+        "model": {"config": {"mr_num_kernels": 200}},
+        "train": {},
+    }
+    cfg = _build_cfg(spec)
+    assert cfg["mr_num_kernels"] == 168  # 200 // 84 * 84 = 168

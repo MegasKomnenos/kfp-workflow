@@ -1,0 +1,21 @@
+metadata:
+  name: mrhysp-cmapss-serving
+  description: MR-HY-SP C-MAPSS custom KServe InferenceService
+  version: v1
+
+namespace: kubeflow-user-example-com
+model_name: mrhysp-cmapss
+model_version: v1
+model_pvc: model-store
+model_subpath: mrhysp-cmapss/v1
+runtime: custom
+predictor_image: kfp-workflow:latest
+replicas: 1
+
+resources:
+  cpu_request: "2"
+  cpu_limit: "2"
+  memory_request: 4Gi
+  memory_limit: 4Gi
+  gpu_request: "0"
+  gpu_limit: "0"

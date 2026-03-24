@@ -1,0 +1,61 @@
+metadata:
+  name: mrhysp-cmapss-smoke
+  description: MR-HY-SP C-MAPSS FD001 smoke test (minimal kernels, CPU only)
+  version: v1
+
+runtime:
+  namespace: kubeflow-user-example-com
+  pipeline_root: ""
+  image: kfp-workflow:latest
+  image_pull_policy: IfNotPresent
+  service_account: default-editor
+  host: "http://127.0.0.1:8888"
+  port_forward_namespace: kubeflow
+  port_forward_service: svc/ml-pipeline
+  use_gpu: false
+  resources:
+    cpu_request: "4"
+    cpu_limit: "4"
+    memory_request: 8Gi
+    memory_limit: 8Gi
+    gpu_request: "0"
+    gpu_limit: "0"
+
+storage:
+  data_pvc: dataset-store
+  model_pvc: model-store
+  storage_class: local-path
+  data_size: 8Gi
+  model_size: 8Gi
+  data_mount_path: /mnt/data
+  model_mount_path: /mnt/models
+
+model:
+  name: mrhysp-cmapss
+  version: v1
+  config:
+    mr_num_kernels: 84
+    n_kernels: 1
+    n_groups: 32
+    n_kernels_sp: 128
+    n_jobs: 4
+    seq_len: 30
+    train_stride: 2
+    max_rul: 125
+    val_mode: sampled_last
+    val_samples_per_unit: 8
+    predict_batch_size: 512
+
+dataset:
+  name: cmapss
+  version: v1
+  config:
+    fd_name: FD001
+    feature_mode: selected
+    scaling_mode: condition
+    download_if_missing: false
+
+train:
+  seed: 42
+  val_split: 0.2
+  selection_metric: rmse
