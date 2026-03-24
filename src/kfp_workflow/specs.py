@@ -128,6 +128,22 @@ def load_pipeline_spec(path: str | Path) -> PipelineSpec:
     return PipelineSpec.model_validate(load_yaml(Path(path)))
 
 
+def load_pipeline_spec_with_overrides(
+    path: str | Path,
+    overrides: list[str] | None = None,
+) -> PipelineSpec:
+    """Load a pipeline spec from YAML, apply CLI overrides, then validate.
+
+    Overrides are applied to the raw dict *before* Pydantic validation,
+    so known fields get type-checked and open dicts pass through.
+    """
+    raw = load_yaml(Path(path))
+    if overrides:
+        from kfp_workflow.config_override import apply_overrides
+        raw = apply_overrides(raw, overrides)
+    return PipelineSpec.model_validate(raw)
+
+
 def load_serving_spec(path: str | Path) -> ServingSpec:
     """Load and validate a serving spec from a YAML file."""
     return ServingSpec.model_validate(load_yaml(Path(path)))

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Type
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +189,30 @@ class ModelPlugin(ABC):
     ) -> SaveResult:
         """Copy model to final PVC path and register in model registry."""
         ...
+
+    # -- Inference ----------------------------------------------------------
+
+    # -- Config schema hooks (optional) ------------------------------------
+
+    @classmethod
+    def model_config_schema(cls) -> Optional[Type]:
+        """Return a Pydantic model for ``model.config`` validation.
+
+        Override in subclasses to enable schema-based validation of
+        model architecture parameters.  Return ``None`` (default) to
+        accept any ``Dict[str, Any]`` without extra validation.
+        """
+        return None
+
+    @classmethod
+    def dataset_config_schema(cls) -> Optional[Type]:
+        """Return a Pydantic model for ``dataset.config`` validation."""
+        return None
+
+    @classmethod
+    def train_config_schema(cls) -> Optional[Type]:
+        """Return a Pydantic model for ``train`` section validation."""
+        return None
 
     # -- Inference ----------------------------------------------------------
 

@@ -12,6 +12,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict
 
+from pydantic import BaseModel, ConfigDict
+
 from kfp_workflow.plugins.base import (
     EvalResult,
     LoadDataResult,
@@ -20,6 +22,42 @@ from kfp_workflow.plugins.base import (
     SaveResult,
     TrainResult,
 )
+
+
+# ---------------------------------------------------------------------------
+# Plugin config schemas — used for --set validation and documentation
+# ---------------------------------------------------------------------------
+
+class MambaSLModelConfig(BaseModel):
+    """Schema for ``model.config`` accepted by the mambasl-cmapss plugin."""
+
+    d_model: int = 64
+    d_state: int = 16
+    d_conv: int = 3
+    expand: int = 2
+    num_kernels: int = 5
+    tv_dt: bool = True
+    tv_B: bool = True
+    tv_C: bool = True
+    use_D: bool = True
+    projection: str = "last"
+    dropout: float = 0.2
+    huber_delta: float = 2.0
+    window_size: int = 50
+    max_rul: float = 125.0
+
+    model_config = ConfigDict(extra="allow")
+
+
+class MambaSLDatasetConfig(BaseModel):
+    """Schema for ``dataset.config`` accepted by the mambasl-cmapss plugin."""
+
+    fd_name: str = "FD001"
+    download_policy: str = "if_missing"
+    feature_mode: str = "settings_plus_sensors"
+    norm_mode: str = "condition_minmax"
+
+    model_config = ConfigDict(extra="allow")
 
 
 def _build_cfg(spec: Dict[str, Any]) -> Dict[str, Any]:
@@ -55,6 +93,14 @@ class MambaSLCmapssPlugin(ModelPlugin):
     @staticmethod
     def name() -> str:
         return "mambasl-cmapss"
+
+    @classmethod
+    def model_config_schema(cls):
+        return MambaSLModelConfig
+
+    @classmethod
+    def dataset_config_schema(cls):
+        return MambaSLDatasetConfig
 
     # -- Stage 1: load_data ------------------------------------------------
 

@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import json
 import subprocess
+import warnings
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
+
+# Suppress noisy third-party deprecation warnings that are not actionable
+warnings.filterwarnings("ignore", category=FutureWarning, module="google")
+warnings.filterwarnings("ignore", category=FutureWarning, module="kfp")
 
 # ---------------------------------------------------------------------------
 # Global state
@@ -76,12 +81,20 @@ def cmd_spec_validate(
         "--type",
         help="Spec type: 'pipeline' or 'serving'.",
     ),
+    set_values: List[str] = typer.Option(
+        [], "--set",
+        help="Override spec values (e.g., --set train.batch_size=128). Pipeline specs only.",
+    ),
 ) -> None:
     """Load and validate a spec file."""
-    from kfp_workflow.specs import load_pipeline_spec, load_serving_spec
+    from kfp_workflow.specs import load_pipeline_spec_with_overrides, load_serving_spec
 
     if spec_type == "pipeline":
-        loaded = load_pipeline_spec(spec)
+        loaded = load_pipeline_spec_with_overrides(spec, set_values or None)
+        if set_values:
+            from kfp_workflow.config_override import validate_plugin_config
+            for w in validate_plugin_config(loaded.model_dump()):
+                typer.echo(f"Warning: {w}", err=True)
     elif spec_type == "serving":
         loaded = load_serving_spec(spec)
     else:
@@ -100,12 +113,16 @@ def cmd_spec_validate(
 def cmd_pipeline_compile(
     spec: Path = typer.Option(..., help="Path to a pipeline YAML spec."),
     output: Path = typer.Option(..., help="Output path for compiled YAML."),
+    set_values: List[str] = typer.Option(
+        [], "--set",
+        help="Override spec values (e.g., --set train.batch_size=128).",
+    ),
 ) -> None:
     """Compile a training pipeline to a KFP v2 YAML package."""
     from kfp_workflow.pipeline.compiler import compile_pipeline
-    from kfp_workflow.specs import load_pipeline_spec
+    from kfp_workflow.specs import load_pipeline_spec_with_overrides
 
-    loaded = load_pipeline_spec(spec)
+    loaded = load_pipeline_spec_with_overrides(spec, set_values or None)
     result = compile_pipeline(loaded, output)
     typer.echo(f"Pipeline compiled to {result}")
 
@@ -118,12 +135,16 @@ def cmd_pipeline_submit(
     user: Optional[str] = typer.Option(None, help="Kubeflow user identity header."),
     existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
     cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
+    set_values: List[str] = typer.Option(
+        [], "--set",
+        help="Override spec values (e.g., --set train.batch_size=128).",
+    ),
 ) -> None:
     """Compile and submit a training pipeline to Kubeflow."""
     from kfp_workflow.pipeline.client import submit_pipeline
-    from kfp_workflow.specs import load_pipeline_spec
+    from kfp_workflow.specs import load_pipeline_spec_with_overrides
 
-    loaded = load_pipeline_spec(spec)
+    loaded = load_pipeline_spec_with_overrides(spec, set_values or None)
     run_id = submit_pipeline(
         loaded,
         namespace=namespace,
