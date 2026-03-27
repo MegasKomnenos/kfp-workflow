@@ -35,4 +35,9 @@ COPY models/multirocket-new/pyproject.toml models/multirocket-new/README.md /wor
 COPY models/multirocket-new/src /workspace/multirocket-new/src
 RUN pip install ./multirocket-new
 
+# Install softs-new model package
+COPY models/softs-new/pyproject.toml models/softs-new/README.md /workspace/softs-new/
+COPY models/softs-new/src /workspace/softs-new/src
+RUN pip install ./softs-new
+
 ENTRYPOINT ["python", "-m", "kfp_workflow.cli.main"]

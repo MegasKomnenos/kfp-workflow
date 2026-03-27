@@ -38,22 +38,36 @@ kfp-workflow spec validate --spec configs/tuning/mambasl_cmapss_tune.yaml --type
 kfp-workflow spec validate --spec configs/pipelines/mrhysp_cmapss_smoke.yaml
 kfp-workflow spec validate --spec configs/serving/mrhysp_cmapss_serve.yaml --type serving
 kfp-workflow spec validate --spec configs/tuning/mrhysp_cmapss_tune.yaml --type tune
+
+# SOFTS
+kfp-workflow spec validate --spec configs/pipelines/softs_cmapss_smoke.yaml
+kfp-workflow spec validate --spec configs/serving/softs_cmapss_serve.yaml --type serving
+kfp-workflow spec validate --spec configs/tuning/softs_cmapss_tune.yaml --type tune
 ```
 
 ### Compile a pipeline
 ```bash
+# MambaSL
 kfp-workflow pipeline compile \
   --spec configs/pipelines/mambasl_cmapss_smoke.yaml \
   --output pipelines/mambasl_cmapss_smoke.yaml
+
+# SOFTS
+kfp-workflow pipeline compile \
+  --spec configs/pipelines/softs_cmapss_smoke.yaml \
+  --output pipelines/softs_cmapss_smoke.yaml
 ```
 
 ### Hyperparameter tuning
 ```bash
 # Preview the search space for a tuning spec
 kfp-workflow tune show-space --spec configs/tuning/mambasl_cmapss_tune.yaml
+kfp-workflow tune show-space --spec configs/tuning/softs_cmapss_tune.yaml
 
 # Use the aggressive profile
 kfp-workflow tune show-space --spec configs/tuning/mambasl_cmapss_tune.yaml \
+  --set hpo.builtin_profile=aggressive
+kfp-workflow tune show-space --spec configs/tuning/softs_cmapss_tune.yaml \
   --set hpo.builtin_profile=aggressive
 
 # Run local HPO (Optuna)
@@ -62,6 +76,11 @@ kfp-workflow tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
   --data-mount-path ./data \
   --output results/best_params.json
 
+kfp-workflow tune run --spec configs/tuning/softs_cmapss_tune.yaml \
+  --set hpo.max_trials=20 --set hpo.algorithm=tpe \
+  --data-mount-path ./data \
+  --output results/softs_best_params.json
+
 # Quick smoke test (2 trials, 2 epochs)
 kfp-workflow tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
   --set hpo.max_trials=2 --set train.max_epochs=2 \
@@ -69,9 +88,11 @@ kfp-workflow tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
 
 # Generate Katib manifest for distributed HPO
 kfp-workflow tune katib --spec configs/tuning/mambasl_cmapss_tune.yaml --dry-run
+kfp-workflow tune katib --spec configs/tuning/softs_cmapss_tune.yaml --dry-run
 
 # Submit Katib experiment to cluster
 kfp-workflow tune katib --spec configs/tuning/mambasl_cmapss_tune.yaml
+kfp-workflow tune katib --spec configs/tuning/softs_cmapss_tune.yaml
 
 # JSON output for scripting
 kfp-workflow --json tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \

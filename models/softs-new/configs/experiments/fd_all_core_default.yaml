@@ -1,0 +1,63 @@
+metadata:
+  name: softs-new-fd-all-default
+  description: Default four-dataset Kubeflow and Katib workflow for SOFTS model
+runtime:
+  namespace: kubeflow-user-example-com
+  pipeline_root: s3://mlpipeline/softs-new/fd-all-default
+  image: softs-new:latest
+  image_pull_policy: IfNotPresent
+  service_account: default-editor
+  use_gpu: true
+  torch_num_threads: 4
+  resources:
+    cpu_request: "4"
+    cpu_limit: "4"
+    memory_request: 16Gi
+    memory_limit: 16Gi
+    gpu_request: "1"
+    gpu_limit: "1"
+storage:
+  mode: pvc
+  data_pvc: cmapss-data
+  results_pvc: cmapss-results
+  storage_class: local-path
+  data_size: 8Gi
+  results_size: 32Gi
+  data_mount_path: /mnt/data
+  results_mount_path: /mnt/results
+datasets:
+  items: [FD001, FD002, FD003, FD004]
+stages: [hpo, final_train_eval, ablation_sweep, aggregate_reports]
+train_defaults:
+  seed: 42
+  feature_mode: settings_plus_sensors
+  norm_mode: condition_minmax
+  selection_metric: rmse
+  score_weight: 0.01
+  val_mode: all_windows
+  val_pseudo_samples: 3
+  val_min_history: 20
+  refit_full_train: true
+  hpo_train_stride: 2
+  hpo_val_stride: 2
+  hpo_max_epochs: 25
+  hpo_patience: 5
+  final_max_epochs: 50
+  final_patience: 8
+hpo:
+  enabled: true
+  builtin_profile: default
+  algorithm: random
+  max_trial_count: 12
+  parallel_trial_count: 2
+  max_failed_trial_count: 3
+  search_space: []
+ablations:
+  enabled: true
+  axes:
+    feature_mode: [settings_plus_sensors, sensors_only]
+    norm_mode: [global_standard, condition_standard, condition_minmax]
+  base_overrides: {}
+outputs:
+  local_results_dir: results
+  retain_model_state: false

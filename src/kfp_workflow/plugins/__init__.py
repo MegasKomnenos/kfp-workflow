@@ -30,6 +30,10 @@ def _build_registry() -> Dict[str, Type[ModelPlugin]]:
     from kfp_workflow.plugins.mrhysp_cmapss import MRHySPCmapssPlugin
     registry[MRHySPCmapssPlugin.name()] = MRHySPCmapssPlugin
 
+    # --- SOFTS C-MAPSS ---
+    from kfp_workflow.plugins.softs_cmapss import SOFTSCmapssPlugin
+    registry[SOFTSCmapssPlugin.name()] = SOFTSCmapssPlugin
+
     # --- Add future model plugins here ---
     # from kfp_workflow.plugins.some_other import SomeOtherPlugin
     # registry[SomeOtherPlugin.name()] = SomeOtherPlugin

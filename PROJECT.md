@@ -14,17 +14,20 @@ test/
 │   ├── pipelines/
 │   │   ├── sample_train.yaml          # Example training pipeline spec
 │   │   ├── mambasl_cmapss_smoke.yaml  # MambaSL C-MAPSS smoke test (2 epochs, CPU)
-│   │   └── mrhysp_cmapss_smoke.yaml   # MR-HY-SP C-MAPSS smoke test (minimal kernels, CPU)
+│   │   ├── mrhysp_cmapss_smoke.yaml   # MR-HY-SP C-MAPSS smoke test (minimal kernels, CPU)
+│   │   └── softs_cmapss_smoke.yaml    # SOFTS C-MAPSS smoke test (2 epochs, CPU, d_core=16)
 │   ├── tuning/
 │   │   ├── mambasl_cmapss_tune.yaml   # MambaSL C-MAPSS HPO tuning spec
-│   │   └── mrhysp_cmapss_tune.yaml    # MR-HY-SP C-MAPSS HPO tuning spec
+│   │   ├── mrhysp_cmapss_tune.yaml    # MR-HY-SP C-MAPSS HPO tuning spec
+│   │   └── softs_cmapss_tune.yaml     # SOFTS C-MAPSS HPO tuning spec (tpe, 20 trials)
 │   └── serving/
 │       ├── sample_serve.yaml          # Example KServe serving spec
 │       ├── mambasl_cmapss_serve.yaml  # MambaSL C-MAPSS custom predictor spec
-│       └── mrhysp_cmapss_serve.yaml   # MR-HY-SP C-MAPSS custom predictor spec
+│       ├── mrhysp_cmapss_serve.yaml   # MR-HY-SP C-MAPSS custom predictor spec
+│       └── softs_cmapss_serve.yaml    # SOFTS C-MAPSS custom predictor spec
 │
 ├── docker/
-│   └── Dockerfile                     # Base image (PyTorch + CUDA + mamba_ssm + mambasl-new + multirocket-new)
+│   └── Dockerfile                     # Base image (PyTorch + CUDA + mamba_ssm + mambasl-new + multirocket-new + softs-new)
 │
 ├── examples/                          # Korean-language tutorials and usage guides
 │   ├── README.md                      # Table of contents and learning order
@@ -53,12 +56,23 @@ test/
 │   │       ├── mamba_layers/          # Mamba_TimeVariant, PositionalEmbedding
 │   │       ├── kubeflow/              # Katib manifest construction, HPO pipeline
 │   │       └── cli/                   # Container-internal CLI (train, katib-trial)
-│   └── multirocket-new/              # MR-HY-SP model package (installed in Docker image)
-│       └── src/multirocket_new/
-│           ├── cmapss.py              # C-MAPSS data loading, windowing, scaling
-│           ├── model.py               # MRHySPRegressor (HYDRA + MultiRocket + SPRocket + RidgeCV)
-│           ├── runner.py              # Experiment runner, metrics, batch prediction
-│           └── config.py              # ExperimentConfig, mr_num_kernels constraint
+│   ├── multirocket-new/              # MR-HY-SP model package (installed in Docker image)
+│   │   └── src/multirocket_new/
+│   │       ├── cmapss.py              # C-MAPSS data loading, windowing, scaling
+│   │       ├── model.py               # MRHySPRegressor (HYDRA + MultiRocket + SPRocket + RidgeCV)
+│   │       ├── runner.py              # Experiment runner, metrics, batch prediction
+│   │       └── config.py              # ExperimentConfig, mr_num_kernels constraint
+│   └── softs-new/                    # SOFTS model package (installed in Docker image)
+│       ├── configs/
+│       │   ├── experiments/           # fd001_smoke, fd_all_core_{default,aggressive}.yaml
+│       │   └── search_spaces/         # default.yaml, aggressive.yaml (13 SOFTS params)
+│       └── src/softs_new/
+│           ├── softs_layers/          # Embed (DataEmbedding_inverted), Transformer_EncDec, softs
+│           ├── cmapss/                # model (SOFTSForRUL), train, search_space, experiment, re-exports
+│           ├── kubeflow/              # pipeline.py, katib.py
+│           ├── cli/                   # main.py (softs-new CLI)
+│           ├── specs.py               # Pydantic ExperimentSpec hierarchy
+│           └── utils.py               # YAML/JSON helpers
 │
 ├── pipelines/
 │   └── README.md                      # Compiled YAML output (git-ignored)
@@ -89,7 +103,8 @@ test/
 │   │   ├── __init__.py                # Plugin registry dict + get_plugin()
 │   │   ├── base.py                    # ModelPlugin ABC + result dataclasses + HPO contract
 │   │   ├── mambasl_cmapss.py          # MambaSL C-MAPSS adapter plugin (incl. HPO)
-│   │   └── mrhysp_cmapss.py           # MR-HY-SP C-MAPSS adapter plugin (incl. HPO)
+│   │   ├── mrhysp_cmapss.py           # MR-HY-SP C-MAPSS adapter plugin (incl. HPO)
+│   │   └── softs_cmapss.py            # SOFTS C-MAPSS adapter plugin (incl. HPO)
 │   ├── tune/
 │   │   ├── __init__.py
 │   │   ├── exceptions.py              # TrialPruned exception (project-level, no Optuna leak)

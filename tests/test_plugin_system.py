@@ -202,3 +202,84 @@ def test_mrhysp_build_cfg_enforces_mr_num_kernels_multiple():
     }
     cfg = _build_cfg(spec)
     assert cfg["mr_num_kernels"] == 168  # 200 // 84 * 84 = 168
+
+
+# ---------------------------------------------------------------------------
+# SOFTS C-MAPSS plugin tests
+# ---------------------------------------------------------------------------
+
+def test_plugin_registry_contains_softs():
+    registry = get_plugin_registry()
+    assert "softs-cmapss" in registry
+
+
+def test_get_softs_plugin_returns_instance():
+    plugin = get_plugin("softs-cmapss")
+    assert isinstance(plugin, ModelPlugin)
+    assert plugin.name() == "softs-cmapss"
+
+
+def test_softs_build_cfg_merges_config():
+    """Test that _build_cfg merges model config with train params."""
+    from kfp_workflow.plugins.softs_cmapss import _build_cfg
+
+    spec = {
+        "model": {
+            "name": "softs-cmapss",
+            "config": {"d_model": 32, "d_core": 16},
+        },
+        "train": {
+            "batch_size": 128,
+            "learning_rate": 0.01,
+            "weight_decay": 0.001,
+        },
+    }
+    cfg = _build_cfg(spec)
+    # Explicit values from config
+    assert cfg["d_model"] == 32
+    assert cfg["d_core"] == 16
+    # Values from train
+    assert cfg["batch_size"] == 128
+    assert cfg["lr"] == 0.01
+    # Defaults
+    assert cfg["d_ff"] == 256
+    assert cfg["e_layers"] == 2
+    assert cfg["window_size"] == 50
+
+
+def test_softs_build_cfg_defaults():
+    """Test _build_cfg with minimal spec gives sensible defaults."""
+    from kfp_workflow.plugins.softs_cmapss import _build_cfg
+
+    spec = {"model": {}, "train": {}}
+    cfg = _build_cfg(spec)
+    assert cfg["d_model"] == 64
+    assert cfg["d_core"] == 32
+    assert cfg["d_ff"] == 256
+    assert cfg["e_layers"] == 2
+    assert cfg["dropout"] == 0.1
+    assert cfg["activation"] == "gelu"
+    assert cfg["use_norm"] is False
+    assert cfg["batch_size"] == 64
+    assert cfg["lr"] == 1e-3
+    assert cfg["max_rul"] == 125.0
+
+
+def test_softs_hpo_search_space_default():
+    """Default profile must include d_core and must NOT include tv_dt."""
+    plugin = get_plugin("softs-cmapss")
+    spec = {"model": {"config": {}}, "train": {}}
+    space = plugin.hpo_search_space(spec, profile="default")
+    names = [p.name for p in space]
+    assert "d_core" in names, "d_core must be in default SOFTS search space"
+    assert "tv_dt" not in names, "tv_dt must not appear in SOFTS search space"
+    assert "d_state" not in names, "d_state must not appear in SOFTS search space"
+
+
+def test_softs_hpo_search_space_aggressive():
+    """Aggressive profile must have at least as many parameters as default."""
+    plugin = get_plugin("softs-cmapss")
+    spec = {"model": {"config": {}}, "train": {}}
+    default_space = plugin.hpo_search_space(spec, profile="default")
+    aggressive_space = plugin.hpo_search_space(spec, profile="aggressive")
+    assert len(aggressive_space) >= len(default_space)

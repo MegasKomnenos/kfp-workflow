@@ -30,6 +30,7 @@ Plugins are discovered via an explicit registry dict in `plugins/__init__.py`. T
 **Current plugins:**
 - `mambasl-cmapss` — MambaSL state-space model for C-MAPSS turbofan RUL prediction (PyTorch)
 - `mrhysp-cmapss` — MR-HY-SP ensemble (MultiRocket + HYDRA + SPRocket + RidgeCV) for C-MAPSS turbofan RUL prediction (sklearn/aeon)
+- `softs-cmapss` — SOFTS (STAR Aggregate-Redistribute) transformer for C-MAPSS turbofan RUL prediction (PyTorch)
 
 ## Quick Start
 
