@@ -27,7 +27,8 @@ dataset:
   name: cmapss
   version: v1
   config:
-    fd_name: FD001
+    fd:
+      - fd_name: FD001
     feature_mode: settings_plus_sensors
     norm_mode: condition_minmax
 

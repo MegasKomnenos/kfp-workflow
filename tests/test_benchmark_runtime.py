@@ -66,10 +66,9 @@ def _runtime_spec(tmp_path: Path) -> dict:
             "dataset": {
                 "kind": "cmapss-timeseries",
                 "config": {
-                    "fd_name": "FD001",
+                    "fd": [{"fd_name": "FD001", "max_sections": 3}],
                     "feature_mode": "settings_plus_sensors",
                     "norm_mode": "condition_minmax",
-                    "max_sections": 3,
                 },
             }
         },
@@ -89,8 +88,7 @@ def test_cmapss_timeseries_dataset_source_yields_sections(tmp_path: Path):
 
 def test_cmapss_timeseries_dataset_source_has_no_default_section_cap(tmp_path: Path):
     spec = _runtime_spec(tmp_path)
-    spec["scenario"]["dataset"]["config"].pop("max_sections", None)
-    spec["scenario"]["dataset"]["config"]["unit_ids"] = [1, 2]
+    spec["scenario"]["dataset"]["config"]["fd"] = [{"fd_name": "FD001", "unit_ids": [1, 2]}]
     dataset = CmapssTimeseriesDatasetSource(spec, spec["scenario"]["dataset"]["config"])
 
     sections = list(dataset.iter_sections())
@@ -100,11 +98,43 @@ def test_cmapss_timeseries_dataset_source_has_no_default_section_cap(tmp_path: P
     assert sections[-1]["start_index"] == 2
 
 
+def test_cmapss_timeseries_dataset_source_supports_multiple_fd_entries(tmp_path: Path):
+    spec = _runtime_spec(tmp_path)
+    data_dir = tmp_path / "data" / "cmapss" / "CMAPSSData"
+    train_rows = []
+    test_rows = []
+    for unit in (3, 4):
+        for cycle in range(1, 8):
+            train_rows.append(_cmapss_row(unit, cycle, sensor_offset=float(unit) + 20.0))
+        for cycle in range(1, 7):
+            test_rows.append(_cmapss_row(unit, cycle, sensor_offset=float(unit) + 30.0))
+    _write_cmapss_rows(data_dir / "train_FD003.txt", train_rows)
+    _write_cmapss_rows(data_dir / "test_FD003.txt", test_rows)
+    (data_dir / "RUL_FD003.txt").write_text("30\n40\n", encoding="utf-8")
+
+    spec["scenario"]["dataset"]["config"]["fd"] = [
+        {"fd_name": "FD001", "unit_ids": [2], "max_sections": 1},
+        {"fd_name": "FD003", "unit_ids": [4], "max_sections": 1},
+    ]
+    dataset = CmapssTimeseriesDatasetSource(spec, spec["scenario"]["dataset"]["config"])
+
+    sections = list(dataset.iter_sections())
+
+    assert [section["fd_name"] for section in sections] == ["FD001", "FD003"]
+    assert [section["unit"] for section in sections] == [2, 4]
+
+
 def test_sequential_replay_pipeline_replays_sections(monkeypatch, tmp_path: Path):
     class _Dataset:
         def iter_sections(self):
             for idx in range(2):
-                yield {"payload": [[float(idx)]], "unit": 1, "start_index": idx, "end_index": idx}
+                yield {
+                    "fd_name": "FD001",
+                    "payload": [[float(idx)]],
+                    "unit": 1,
+                    "start_index": idx,
+                    "end_index": idx,
+                }
 
     calls = []
     sleeps = []
@@ -135,6 +165,7 @@ def test_sequential_replay_pipeline_replays_sections(monkeypatch, tmp_path: Path
     assert calls[0][0] == "http://svc/v1/models/bench-svc:predict"
     assert calls[0][2] == 7
     assert sleeps == [0.5, 0.5]
+    assert result["requests"][0]["fd_name"] == "FD001"
 
 
 def test_kepler_energy_metric_collector_queries_prometheus(monkeypatch):

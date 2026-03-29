@@ -34,7 +34,13 @@ from kfp_workflow.plugins.base import (
     TrainResult,
 )
 from kfp_workflow.plugins.cmapss_utils import (
+    cap_array_splits,
+    CmapssDatasetSelection,
+    cmapss_fd_signature,
+    cmapss_fd_summary,
     cmapss_storage_root,
+    filter_cmapss_unit_ids,
+    normalize_cmapss_fd_entries,
     resolve_cmapss_data_dir,
 )
 
@@ -61,10 +67,9 @@ class MRHySPModelConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-class MRHySPDatasetConfig(BaseModel):
+class MRHySPDatasetConfig(CmapssDatasetSelection):
     """Schema for ``dataset.config`` accepted by the mrhysp-cmapss plugin."""
 
-    fd_name: str = "FD001"
     feature_mode: str = "selected"
     scaling_mode: str = "condition"
     download_policy: Literal["never", "if_missing", "always"] = "never"
@@ -145,6 +150,54 @@ def _resolve_cmapss_data_dir(data_mount_path: str) -> Path:
     return resolve_cmapss_data_dir(data_mount_path)
 
 
+def _filter_fd_raw_arrays(
+    train_raw,
+    test_raw,
+    test_rul,
+    unit_ids,
+):
+    import numpy as np
+
+    selected_units = filter_cmapss_unit_ids(
+        test_raw[:, 0].astype(int).tolist(),
+        unit_ids,
+    ) if unit_ids else None
+    if not selected_units:
+        if unit_ids:
+            selected = set(int(uid) for uid in unit_ids)
+            train_filtered = train_raw[np.isin(train_raw[:, 0].astype(int), list(selected))]
+            test_filtered = test_raw[np.isin(test_raw[:, 0].astype(int), list(selected))]
+            ordered_test_units = sorted(test_raw[:, 0].astype(int).tolist())
+            selected_unique = sorted(set(test_filtered[:, 0].astype(int).tolist()))
+            rul_map = {
+                int(uid): float(test_rul[index])
+                for index, uid in enumerate(sorted(set(ordered_test_units)))
+            }
+            filtered_rul = np.asarray(
+                [rul_map[int(uid)] for uid in selected_unique if int(uid) in rul_map],
+                dtype=np.float64,
+            )
+            return train_filtered, test_filtered, filtered_rul
+        return train_raw, test_raw, test_rul
+    selected = set(int(uid) for uid in selected_units)
+    train_filtered = train_raw[np.isin(train_raw[:, 0].astype(int), list(selected))]
+    test_filtered = test_raw[np.isin(test_raw[:, 0].astype(int), list(selected))]
+    ordered_test_units = sorted(set(test_raw[:, 0].astype(int).tolist()))
+    rul_map = {
+        int(uid): float(test_rul[index])
+        for index, uid in enumerate(ordered_test_units)
+    }
+    filtered_rul = np.asarray(
+        [
+            rul_map[int(uid)]
+            for uid in sorted(set(test_filtered[:, 0].astype(int).tolist()))
+            if int(uid) in rul_map
+        ],
+        dtype=np.float64,
+    )
+    return train_filtered, test_filtered, filtered_rul
+
+
 class MRHySPCmapssPlugin(ModelPlugin):
     """MR-HY-SP ensemble trained/evaluated on C-MAPSS turbofan degradation data.
 
@@ -184,7 +237,7 @@ class MRHySPCmapssPlugin(ModelPlugin):
         )
 
         ds_cfg = spec["dataset"].get("config", {})
-        fd_name = ds_cfg.get("fd_name", "FD001")
+        fd_entries = normalize_cmapss_fd_entries(ds_cfg, context="dataset.config")
         storage_root = cmapss_storage_root(data_mount_path)
         download_policy = _download_policy(ds_cfg)
 
@@ -192,23 +245,47 @@ class MRHySPCmapssPlugin(ModelPlugin):
             ensure_cmapss_downloaded(storage_root)
 
         data_dir = resolve_cmapss_data_dir(data_mount_path)
+        total_train_units = 0
+        total_test_units = 0
+        fd_metadata = []
+        for entry in fd_entries:
+            fd_name = entry["fd_name"]
+            train_raw = load_split(data_dir / f"train_{fd_name}.txt")
+            test_raw = load_split(data_dir / f"test_{fd_name}.txt")
+            test_rul = load_rul_targets(data_dir / f"RUL_{fd_name}.txt")
+            train_raw, test_raw, test_rul = _filter_fd_raw_arrays(
+                train_raw,
+                test_raw,
+                test_rul,
+                entry.get("unit_ids"),
+            )
 
-        train_raw = load_split(data_dir / f"train_{fd_name}.txt")
-        test_raw = load_split(data_dir / f"test_{fd_name}.txt")
-        test_rul = load_rul_targets(data_dir / f"RUL_{fd_name}.txt")
-
-        n_train_units = len(np.unique(train_raw[:, 0].astype(int)))
-        n_test_units = len(np.unique(test_raw[:, 0].astype(int)))
+            n_train_units = len(np.unique(train_raw[:, 0].astype(int)))
+            n_test_units = len(np.unique(test_raw[:, 0].astype(int)))
+            total_train_units += n_train_units
+            total_test_units += n_test_units
+            fd_metadata.append(
+                {
+                    "fd_name": fd_name,
+                    "unit_ids": entry.get("unit_ids"),
+                    "max_sections": entry.get("max_sections"),
+                    "train_rows": int(len(train_raw)),
+                    "test_rows": int(len(test_raw)),
+                    "rul_test_count": int(len(test_rul)),
+                    "num_train_units": int(n_train_units),
+                    "num_test_units": int(n_test_units),
+                }
+            )
 
         return LoadDataResult(
             data_dir=str(data_dir),
-            dataset_name=fd_name,
-            num_train_samples=n_train_units,
-            num_test_samples=n_test_units,
+            dataset_name=cmapss_fd_summary(fd_entries),
+            num_train_samples=total_train_units,
+            num_test_samples=total_test_units,
             metadata={
-                "train_rows": int(len(train_raw)),
-                "test_rows": int(len(test_raw)),
-                "rul_test_count": int(len(test_rul)),
+                "fd": fd_entries,
+                "fd_signature": list(cmapss_fd_signature(fd_entries)),
+                "fd_details": fd_metadata,
             },
         )
 
@@ -237,60 +314,92 @@ class MRHySPCmapssPlugin(ModelPlugin):
 
         ds_cfg = spec["dataset"].get("config", {})
         cfg = _build_cfg(spec)
-        fd_name = load_result.dataset_name
+        fd_entries = load_result.metadata.get("fd") or normalize_cmapss_fd_entries(
+            ds_cfg,
+            context="dataset.config",
+        )
         data_dir = Path(load_result.data_dir)
 
-        # Reload raw arrays
-        train_raw = load_split(data_dir / f"train_{fd_name}.txt")
-        test_raw = load_split(data_dir / f"test_{fd_name}.txt")
-        test_rul = load_rul_targets(data_dir / f"RUL_{fd_name}.txt")
-
         feature_idx = feature_columns(ds_cfg.get("feature_mode", "selected"))
-
-        # Train/val unit split (same logic as runner.py)
-        grouped_train = group_by_unit(train_raw)
-        grouped_test = group_by_unit(test_raw)
-
-        train_units = sorted(np.unique(train_raw[:, 0].astype(int)).tolist())
-        rng = np.random.RandomState(int(cfg["seed"]))
-        rng.shuffle(train_units)
-        n_val_units = max(1, int(len(train_units) * float(cfg["val_frac"])))
-        val_units = train_units[:n_val_units]
-        tr_units = train_units[n_val_units:]
-
-        grouped_tr = {uid: grouped_train[uid] for uid in grouped_train if uid in set(tr_units)}
-        grouped_val = {uid: grouped_train[uid] for uid in grouped_train if uid in set(val_units)}
-
-        # Feature extraction and scaling
         scaling_mode = ds_cfg.get("scaling_mode", "condition")
-        raw_feats_tr = extract_feature_groups(grouped_tr, feature_idx)
-        raw_feats_val = extract_feature_groups(grouped_val, feature_idx)
-        raw_feats_te = extract_feature_groups(grouped_test, feature_idx)
-
-        global_scaler, cond_scalers = fit_scalers(raw_feats_tr, scaling_mode)
-        feats_tr = apply_scalers(raw_feats_tr, global_scaler, cond_scalers, scaling_mode)
-        feats_val = apply_scalers(raw_feats_val, global_scaler, cond_scalers, scaling_mode)
-        feats_te = apply_scalers(raw_feats_te, global_scaler, cond_scalers, scaling_mode)
-
-        # Windowing
         seq_len = int(cfg["seq_len"])
         max_rul = int(cfg["max_rul"])
         train_stride = int(cfg["train_stride"])
+        x_train_parts = []
+        y_train_parts = []
+        x_val_parts = []
+        y_val_parts = []
+        x_test_parts = []
+        y_test_parts = []
+        feature_dim = None
+        global_scaler = None
+        cond_scalers = {}
 
-        x_train, y_train = make_train_windows(
-            grouped_tr, feats_tr, seq_len, max_rul, train_stride,
-        )
-        x_val, y_val = make_val_windows(
-            grouped_val, feats_val, seq_len, max_rul,
-            cfg["val_mode"], int(cfg["val_samples_per_unit"]), int(cfg["seed"]),
-        )
-        x_test, y_test, _ = make_test_windows(
-            grouped_test, feats_te, seq_len, test_rul, max_rul,
-        )
+        for entry in fd_entries:
+            fd_name = entry["fd_name"]
+            train_raw = load_split(data_dir / f"train_{fd_name}.txt")
+            test_raw = load_split(data_dir / f"test_{fd_name}.txt")
+            test_rul = load_rul_targets(data_dir / f"RUL_{fd_name}.txt")
+            train_raw, test_raw, test_rul = _filter_fd_raw_arrays(
+                train_raw,
+                test_raw,
+                test_rul,
+                entry.get("unit_ids"),
+            )
 
-        # Determine feature_dim from channels dimension
-        # Arrays are (N, C, T) — channels-first
-        feature_dim = int(x_train.shape[1])
+            grouped_train = group_by_unit(train_raw)
+            grouped_test = group_by_unit(test_raw)
+
+            train_units = sorted(np.unique(train_raw[:, 0].astype(int)).tolist())
+            rng = np.random.RandomState(int(cfg["seed"]))
+            rng.shuffle(train_units)
+            n_val_units = max(1, int(len(train_units) * float(cfg["val_frac"])))
+            val_units = train_units[:n_val_units]
+            tr_units = train_units[n_val_units:]
+
+            grouped_tr = {uid: grouped_train[uid] for uid in grouped_train if uid in set(tr_units)}
+            grouped_val = {uid: grouped_train[uid] for uid in grouped_train if uid in set(val_units)}
+
+            raw_feats_tr = extract_feature_groups(grouped_tr, feature_idx)
+            raw_feats_val = extract_feature_groups(grouped_val, feature_idx)
+            raw_feats_te = extract_feature_groups(grouped_test, feature_idx)
+
+            global_scaler, cond_scalers = fit_scalers(raw_feats_tr, scaling_mode)
+            feats_tr = apply_scalers(raw_feats_tr, global_scaler, cond_scalers, scaling_mode)
+            feats_val = apply_scalers(raw_feats_val, global_scaler, cond_scalers, scaling_mode)
+            feats_te = apply_scalers(raw_feats_te, global_scaler, cond_scalers, scaling_mode)
+
+            x_train, y_train = make_train_windows(
+                grouped_tr, feats_tr, seq_len, max_rul, train_stride,
+            )
+            x_val, y_val = make_val_windows(
+                grouped_val, feats_val, seq_len, max_rul,
+                cfg["val_mode"], int(cfg["val_samples_per_unit"]), int(cfg["seed"]),
+            )
+            x_test, y_test, _ = make_test_windows(
+                grouped_test, feats_te, seq_len, test_rul, max_rul,
+            )
+
+            x_train, y_train = cap_array_splits(x_train, y_train, max_sections=entry.get("max_sections"))
+            x_val, y_val = cap_array_splits(x_val, y_val, max_sections=entry.get("max_sections"))
+            x_test, y_test = cap_array_splits(x_test, y_test, max_sections=entry.get("max_sections"))
+
+            x_train_parts.append(x_train)
+            y_train_parts.append(y_train)
+            x_val_parts.append(x_val)
+            y_val_parts.append(y_val)
+            x_test_parts.append(x_test)
+            y_test_parts.append(y_test)
+            if feature_dim is None:
+                feature_dim = int(x_train.shape[1])
+
+        x_train = np.concatenate(x_train_parts, axis=0)
+        y_train = np.concatenate(y_train_parts, axis=0)
+        x_val = np.concatenate(x_val_parts, axis=0)
+        y_val = np.concatenate(y_val_parts, axis=0)
+        x_test = np.concatenate(x_test_parts, axis=0)
+        y_test = np.concatenate(y_test_parts, axis=0)
+        feature_dim = int(feature_dim or x_train.shape[1])
 
         # Save artifacts
         out = Path(artifacts_dir)
@@ -465,11 +574,12 @@ class MRHySPCmapssPlugin(ModelPlugin):
                 framework="sklearn",
                 description=(
                     f"MR-HY-SP C-MAPSS "
-                    f"{spec['dataset'].get('config', {}).get('fd_name', '')}"
+                    f"{cmapss_fd_summary(normalize_cmapss_fd_entries(spec['dataset'].get('config', {}), context='dataset.config'))}"
                 ),
                 parameters={
                     "metrics": eval_result.metrics,
                     "config": _build_cfg(spec),
+                    "dataset": spec["dataset"].get("config", {}),
                 },
             )
         except Exception:
@@ -569,9 +679,10 @@ class MRHySPCmapssPlugin(ModelPlugin):
 
         # --- Data loading & preprocessing (cached across trials) ----------
         ds_cfg = spec["dataset"].get("config", {})
+        fd_entries = normalize_cmapss_fd_entries(ds_cfg, context="dataset.config")
         cfg = _build_cfg(spec)
         cache_key = (
-            ds_cfg.get("fd_name", "FD001"),
+            cmapss_fd_signature(fd_entries),
             int(cfg["seq_len"]),
             int(cfg["max_rul"]),
             ds_cfg.get("feature_mode", "selected"),

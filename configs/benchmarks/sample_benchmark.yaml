@@ -55,8 +55,9 @@ scenario:
   dataset:
     kind: cmapss-timeseries
     config:
-      fd_name: FD001
-      max_sections: 5
+      fd:
+        - fd_name: FD001
+          max_sections: 5
   pipeline:
     kind: sequential-replay
     config:

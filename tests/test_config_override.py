@@ -81,6 +81,16 @@ class TestSetNested:
         set_nested(d, "model.config.d_model", 128)
         assert d["model"]["config"]["d_state"] == 16
 
+    def test_sets_list_index_path(self):
+        d = {"dataset": {"config": {"fd": [{"fd_name": "FD001"}]}}}
+        set_nested(d, "dataset.config.fd[0].fd_name", "FD003")
+        assert d["dataset"]["config"]["fd"][0]["fd_name"] == "FD003"
+
+    def test_creates_list_index_path(self):
+        d = {}
+        set_nested(d, "dataset.config.fd[0].fd_name", "FD001")
+        assert d == {"dataset": {"config": {"fd": [{"fd_name": "FD001"}]}}}
+
 
 # ---------------------------------------------------------------------------
 # apply_overrides
@@ -128,6 +138,11 @@ class TestApplyOverrides:
         d = {}
         apply_overrides(d, ['features=[1,2,3]'])
         assert d["features"] == [1, 2, 3]
+
+    def test_list_index_override(self):
+        d = {"dataset": {"config": {"fd": [{"fd_name": "FD001"}]}}}
+        apply_overrides(d, ["dataset.config.fd[0].unit_ids=[1,2,3]"])
+        assert d["dataset"]["config"]["fd"][0]["unit_ids"] == [1, 2, 3]
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +225,7 @@ class TestValidatePluginConfig:
     def test_valid_config_no_warnings(self):
         spec = {
             "model": {"name": "mambasl-cmapss", "config": {"d_model": 128}},
-            "dataset": {"name": "cmapss", "config": {"fd_name": "FD001"}},
+            "dataset": {"name": "cmapss", "config": {"fd": [{"fd_name": "FD001"}]}},
             "train": {},
         }
         warnings = validate_plugin_config(spec)
@@ -219,7 +234,7 @@ class TestValidatePluginConfig:
     def test_invalid_type_produces_warning(self):
         spec = {
             "model": {"name": "mambasl-cmapss", "config": {"d_model": "not_an_int"}},
-            "dataset": {"name": "cmapss", "config": {}},
+            "dataset": {"name": "cmapss", "config": {"fd": [{"fd_name": "FD001"}]}},
             "train": {},
         }
         warnings = validate_plugin_config(spec)
@@ -275,7 +290,7 @@ model:
 dataset:
   name: cmapss
   config:
-    fd_name: [FD001]
+    fd_name: FD001
 """)
         runner = CliRunner()
 

@@ -50,7 +50,8 @@ dataset:
   name: cmapss
   version: v1
   config:
-    fd_name: FD001
+    fd:
+      - fd_name: FD001
     feature_mode: selected
     scaling_mode: condition
     download_if_missing: false

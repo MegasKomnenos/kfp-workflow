@@ -22,18 +22,101 @@ def coerce_value(raw: str) -> Any:
         return raw
 
 
-def set_nested(d: dict, dotted_key: str, value: Any) -> None:
-    """Set a value in a nested dict using a dotted key path.
+def _parse_path(dotted_key: str) -> List[Any]:
+    """Parse dotted keys with optional list indexes.
 
-    Example: ``set_nested(d, "model.config.d_model", 128)``
-    creates intermediate dicts as needed.
+    Supported examples:
+    - ``model.config.d_model``
+    - ``dataset.config.fd[0].fd_name``
     """
-    keys = dotted_key.split(".")
-    for key in keys[:-1]:
-        if key not in d or not isinstance(d[key], dict):
-            d[key] = {}
-        d = d[key]
-    d[keys[-1]] = value
+    tokens: List[Any] = []
+    buf = ""
+    index_buf = ""
+    in_index = False
+
+    for char in dotted_key:
+        if in_index:
+            if char == "]":
+                if not index_buf:
+                    raise ValueError(f"Empty list index in override key: {dotted_key!r}")
+                tokens.append(int(index_buf))
+                index_buf = ""
+                in_index = False
+                continue
+            if not char.isdigit():
+                raise ValueError(f"Invalid list index in override key: {dotted_key!r}")
+            index_buf += char
+            continue
+
+        if char == ".":
+            if buf:
+                tokens.append(buf)
+                buf = ""
+            continue
+        if char == "[":
+            if buf:
+                tokens.append(buf)
+                buf = ""
+            in_index = True
+            continue
+        if char == "]":
+            raise ValueError(f"Unexpected ']' in override key: {dotted_key!r}")
+        buf += char
+
+    if in_index:
+        raise ValueError(f"Unclosed list index in override key: {dotted_key!r}")
+    if buf:
+        tokens.append(buf)
+    if not tokens:
+        raise ValueError(f"Empty override key: {dotted_key!r}")
+    return tokens
+
+
+def set_nested(d: dict, dotted_key: str, value: Any) -> None:
+    """Set a value in a nested structure using dotted keys and list indexes."""
+    tokens = _parse_path(dotted_key)
+    current: Any = d
+
+    for index, token in enumerate(tokens[:-1]):
+        next_token = tokens[index + 1]
+        if isinstance(token, str):
+            if not isinstance(current, dict):
+                raise ValueError(
+                    f"Cannot descend into non-dict at '{token}' while setting {dotted_key!r}"
+                )
+            if token not in current or not isinstance(current[token], (dict, list)):
+                current[token] = [] if isinstance(next_token, int) else {}
+            current = current[token]
+            continue
+
+        if token < 0:
+            raise ValueError(f"Negative list index not allowed in override key: {dotted_key!r}")
+        if not isinstance(current, list):
+            raise ValueError(
+                f"Cannot index non-list with [{token}] while setting {dotted_key!r}"
+            )
+        while len(current) <= token:
+            current.append([] if isinstance(next_token, int) else {})
+        current = current[token]
+
+    last = tokens[-1]
+    if isinstance(last, str):
+        if not isinstance(current, dict):
+            raise ValueError(
+                f"Cannot assign key '{last}' into non-dict while setting {dotted_key!r}"
+            )
+        current[last] = value
+        return
+
+    if last < 0:
+        raise ValueError(f"Negative list index not allowed in override key: {dotted_key!r}")
+    if not isinstance(current, list):
+        raise ValueError(
+            f"Cannot index non-list with [{last}] while setting {dotted_key!r}"
+        )
+    while len(current) <= last:
+        current.append(None)
+    current[last] = value
 
 
 def apply_overrides(spec_dict: dict, overrides: List[str]) -> dict:

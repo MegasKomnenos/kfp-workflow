@@ -113,7 +113,7 @@ Pipeline, benchmark, serving, and tuning behaviour is driven by YAML specs under
 
 **PipelineSpec** supports plugin-specific config via:
 - `model.config` — Architecture params (e.g., d_model, d_state for MambaSL)
-- `dataset.config` — Dataset params (e.g., fd_name, feature_mode for C-MAPSS)
+- `dataset.config` — Dataset params (e.g., `fd[]`, feature_mode for C-MAPSS)
 - `train` — Generic hyperparams (batch_size, lr, epochs, patience, seed)
 
 **ServingSpec** supports:
@@ -176,7 +176,7 @@ kfp-workflow pipeline submit --spec configs/pipelines/mambasl_cmapss_smoke.yaml 
 # Switch dataset variant
 kfp-workflow pipeline compile --spec configs/pipelines/mambasl_cmapss_smoke.yaml \
     --output pipelines/fd003.yaml \
-    --set dataset.config.fd_name=FD003
+    --set dataset.config.fd[0].fd_name=FD003
 ```
 
 **Precedence:** CLI `--set` > YAML spec > plugin defaults.

@@ -258,7 +258,7 @@ kfp-workflow pipeline submit \
 # With overrides:
 kfp-workflow pipeline submit \
   --spec configs/pipelines/mambasl_cmapss_smoke.yaml \
-  --set dataset.config.fd_name=FD003 \
+  --set dataset.config.fd[0].fd_name=FD003 \
   --set train.learning_rate=0.0005
 ```
 

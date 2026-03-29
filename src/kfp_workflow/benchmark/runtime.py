@@ -23,7 +23,11 @@ from kfp_workflow.benchmark.interfaces import (
     ScenarioPipeline,
     ensure_metric_collectors,
 )
-from kfp_workflow.plugins.cmapss_utils import resolve_cmapss_data_dir
+from kfp_workflow.plugins.cmapss_utils import (
+    filter_cmapss_unit_ids,
+    normalize_cmapss_fd_entries,
+    resolve_cmapss_data_dir,
+)
 
 
 _EMBEDDED_COUNTER = itertools.count()
@@ -97,7 +101,6 @@ class CmapssTimeseriesDatasetSource(DatasetSource):
         model_config = json.loads(model_config_path.read_text("utf-8")) if model_config_path.exists() else {}
         model_cfg = model_config.get("cfg", model_config)
 
-        fd_name = self._config.get("fd_name", "FD001")
         feature_mode = self._config.get("feature_mode", "settings_plus_sensors")
         norm_mode = self._config.get("norm_mode", "condition_minmax")
         seed = int(self._config.get("seed", 42))
@@ -108,55 +111,65 @@ class CmapssTimeseriesDatasetSource(DatasetSource):
             )
         )
         section_stride = int(self._config.get("section_stride", 1))
-        raw_max_sections = self._config.get("max_sections")
-        max_sections = None if raw_max_sections is None else int(raw_max_sections)
-
-        train_df, test_df, _ = load_fd(Path(data_dir), fd_name)
-        _, _, te_df = preprocess_frames(
-            train_df,
-            train_df.copy(),
-            test_df.copy(),
-            feature_mode=feature_mode,
-            norm_mode=norm_mode,
-            n_conditions=FD_CONFIGS[fd_name]["n_conditions"],
-            seed=seed,
+        fd_entries = normalize_cmapss_fd_entries(
+            self._config,
+            context="scenario.dataset.config",
         )
         feature_cols = get_feature_cols(feature_mode)
 
-        unit_ids = self._config.get("unit_ids")
-        if unit_ids:
-            selected_units = [int(uid) for uid in unit_ids]
-        else:
-            selected_units = sorted(te_df["unit"].unique().tolist())[:1]
+        for entry in fd_entries:
+            fd_name = entry["fd_name"]
+            max_sections = entry["max_sections"]
+            train_df, test_df, _ = load_fd(Path(data_dir), fd_name)
+            _, _, te_df = preprocess_frames(
+                train_df,
+                train_df.copy(),
+                test_df.copy(),
+                feature_mode=feature_mode,
+                norm_mode=norm_mode,
+                n_conditions=FD_CONFIGS[fd_name]["n_conditions"],
+                seed=seed,
+            )
 
-        count = 0
-        for uid in selected_units:
-            sub = te_df[te_df["unit"] == uid].copy()
-            x = sub[feature_cols].to_numpy(np.float32)
-            if len(x) == 0:
-                continue
-            if len(x) < window_size:
-                pad = np.repeat(x[:1], window_size - len(x), axis=0)
-                window = np.concatenate([pad, x], axis=0)
-                yield {
-                    "payload": window.tolist(),
-                    "unit": int(uid),
-                    "start_index": 0,
-                    "end_index": int(len(x) - 1),
-                }
-                return
+            selected_units = filter_cmapss_unit_ids(
+                te_df["unit"].unique().tolist(),
+                entry.get("unit_ids"),
+            )
+            count = 0
+            for uid in selected_units:
+                sub = te_df[te_df["unit"] == uid].copy()
+                x = sub[feature_cols].to_numpy(np.float32)
+                if len(x) == 0:
+                    continue
+                if len(x) < window_size:
+                    pad = np.repeat(x[:1], window_size - len(x), axis=0)
+                    window = np.concatenate([pad, x], axis=0)
+                    yield {
+                        "fd_name": fd_name,
+                        "payload": window.tolist(),
+                        "unit": int(uid),
+                        "start_index": 0,
+                        "end_index": int(len(x) - 1),
+                    }
+                    count += 1
+                    if max_sections is not None and count >= max_sections:
+                        break
+                    continue
 
-            for start in range(0, len(x) - window_size + 1, section_stride):
-                end = start + window_size
-                yield {
-                    "payload": x[start:end].tolist(),
-                    "unit": int(uid),
-                    "start_index": int(start),
-                    "end_index": int(end - 1),
-                }
-                count += 1
+                for start in range(0, len(x) - window_size + 1, section_stride):
+                    end = start + window_size
+                    yield {
+                        "fd_name": fd_name,
+                        "payload": x[start:end].tolist(),
+                        "unit": int(uid),
+                        "start_index": int(start),
+                        "end_index": int(end - 1),
+                    }
+                    count += 1
+                    if max_sections is not None and count >= max_sections:
+                        break
                 if max_sections is not None and count >= max_sections:
-                    return
+                    break
 
 
 class SequentialReplayPipeline(ScenarioPipeline):
@@ -194,6 +207,7 @@ class SequentialReplayPipeline(ScenarioPipeline):
             records.append(
                 {
                     "index": index,
+                    "fd_name": section.get("fd_name"),
                     "unit": section.get("unit"),
                     "start_index": section.get("start_index"),
                     "end_index": section.get("end_index"),

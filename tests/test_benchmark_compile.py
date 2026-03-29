@@ -39,7 +39,7 @@ def test_smoke_benchmark_refs_materialize():
     )
     assert spec.metadata.name == "mambasl-cmapss-benchmark-smoke"
     assert materialized["scenario"]["dataset"]["kind"] == "cmapss-timeseries"
-    assert materialized["scenario"]["dataset"]["config"]["unit_ids"] == [1, 2, 3]
+    assert materialized["scenario"]["dataset"]["config"]["fd"][0]["unit_ids"] == [1, 2, 3]
     assert materialized["metrics"][0]["kind"] == "kepler-energy"
     assert materialized["metrics"][0]["config"]["settle_seconds"] == 20
 
@@ -57,7 +57,7 @@ def build_benchmark_spec():
             "model_subpath": "mambasl-cmapss/v1",
         },
         "scenario": {
-            "dataset": {"kind": "cmapss-timeseries", "config": {"fd_name": "FD001"}},
+            "dataset": {"kind": "cmapss-timeseries", "config": {"fd": [{"fd_name": "FD001"}]}},
             "pipeline": {"kind": "sequential-replay", "config": {"interval_hz": 1.0}},
         },
         "metrics": [{"kind": "kepler-energy", "config": {"mode": "dynamic"}}],

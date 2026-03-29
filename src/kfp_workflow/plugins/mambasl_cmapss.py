@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 from pydantic import BaseModel, ConfigDict
 
@@ -23,7 +23,12 @@ from kfp_workflow.plugins.base import (
     TrainResult,
 )
 from kfp_workflow.plugins.cmapss_utils import (
+    cap_array_splits,
+    CmapssDatasetSelection,
+    cmapss_fd_signature,
+    cmapss_fd_summary,
     cmapss_storage_root,
+    normalize_cmapss_fd_entries,
     resolve_cmapss_data_dir,
 )
 
@@ -53,10 +58,9 @@ class MambaSLModelConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-class MambaSLDatasetConfig(BaseModel):
+class MambaSLDatasetConfig(CmapssDatasetSelection):
     """Schema for ``dataset.config`` accepted by the mambasl-cmapss plugin."""
 
-    fd_name: str = "FD001"
     download_policy: str = "if_missing"
     feature_mode: str = "settings_plus_sensors"
     norm_mode: str = "condition_minmax"
@@ -91,6 +95,31 @@ def _build_cfg(spec: Dict[str, Any]) -> Dict[str, Any]:
     return cfg
 
 
+def _filter_fd_frames(
+    train_df,
+    test_df,
+    rul_test,
+    unit_ids: List[int] | None,
+):
+    if not unit_ids:
+        return train_df, test_df, rul_test
+
+    selected = set(int(uid) for uid in unit_ids)
+    train_filtered = train_df[train_df["unit"].isin(selected)].copy()
+    test_filtered = test_df[test_df["unit"].isin(selected)].copy()
+    ordered_test_units = sorted(test_df["unit"].unique().tolist())
+    rul_map = {
+        int(uid): float(rul_test[index])
+        for index, uid in enumerate(ordered_test_units)
+    }
+    filtered_rul = [
+        rul_map[int(uid)]
+        for uid in sorted(test_filtered["unit"].unique().tolist())
+        if int(uid) in rul_map
+    ]
+    return train_filtered, test_filtered, filtered_rul
+
+
 class MambaSLCmapssPlugin(ModelPlugin):
     """MambaSL model trained/evaluated on C-MAPSS turbofan degradation data."""
 
@@ -118,7 +147,7 @@ class MambaSLCmapssPlugin(ModelPlugin):
         from mambasl_new.specs import DataSpec
 
         ds_cfg = spec["dataset"].get("config", {})
-        fd_name = ds_cfg.get("fd_name", "FD001")
+        fd_entries = normalize_cmapss_fd_entries(ds_cfg, context="dataset.config")
         storage_root = cmapss_storage_root(data_mount_path)
 
         data_spec = DataSpec(
@@ -133,16 +162,41 @@ class MambaSLCmapssPlugin(ModelPlugin):
 
         _, extract_dir = ensure_cmapss_downloaded(data_spec)
         data_dir = resolve_cmapss_data_dir(str(extract_dir))
-        train_df, test_df, rul_test = load_fd(data_dir, fd_name)
+        total_train = 0
+        total_test = 0
+        fd_metadata = []
+        for entry in fd_entries:
+            fd_name = entry["fd_name"]
+            train_df, test_df, rul_test = load_fd(data_dir, fd_name)
+            train_df, test_df, rul_test = _filter_fd_frames(
+                train_df,
+                test_df,
+                rul_test,
+                entry.get("unit_ids"),
+            )
+            total_train += len(train_df)
+            total_test += len(test_df)
+            fd_metadata.append(
+                {
+                    "fd_name": fd_name,
+                    "unit_ids": entry.get("unit_ids"),
+                    "max_sections": entry.get("max_sections"),
+                    "fd_config": FD_CONFIGS.get(fd_name, {}),
+                    "rul_test_count": int(len(rul_test)),
+                    "num_train_rows": int(len(train_df)),
+                    "num_test_rows": int(len(test_df)),
+                }
+            )
 
         return LoadDataResult(
             data_dir=str(data_dir),
-            dataset_name=fd_name,
-            num_train_samples=len(train_df),
-            num_test_samples=len(test_df),
+            dataset_name=cmapss_fd_summary(fd_entries),
+            num_train_samples=total_train,
+            num_test_samples=total_test,
             metadata={
-                "fd_config": FD_CONFIGS.get(fd_name, {}),
-                "rul_test_count": int(len(rul_test)),
+                "fd": fd_entries,
+                "fd_signature": list(cmapss_fd_signature(fd_entries)),
+                "fd_details": fd_metadata,
             },
         )
 
@@ -168,46 +222,81 @@ class MambaSLCmapssPlugin(ModelPlugin):
         ds_cfg = spec["dataset"].get("config", {})
         train_cfg = spec.get("train", {})
         model_cfg = _build_cfg(spec)
-        fd_name = load_result.dataset_name
+        fd_entries = load_result.metadata.get("fd") or normalize_cmapss_fd_entries(
+            ds_cfg,
+            context="dataset.config",
+        )
 
         extract_dir = Path(load_result.data_dir)
-        train_df, test_df, rul_test = load_fd(extract_dir, fd_name)
-        train_df = add_train_rul(train_df)
-
         seed = train_cfg.get("seed", 42)
         val_split = train_cfg.get("val_split", 0.2)
-        train_units, val_units = choose_val_units(
-            train_df["unit"].unique(), seed=seed, frac=val_split,
-        )
-        tr_df = train_df[train_df["unit"].isin(train_units)].copy()
-        va_df = train_df[train_df["unit"].isin(val_units)].copy()
-
         feature_mode = ds_cfg.get("feature_mode", "settings_plus_sensors")
         norm_mode = ds_cfg.get("norm_mode", "condition_minmax")
-        n_conditions = FD_CONFIGS[fd_name]["n_conditions"]
-
-        tr_df, va_df, te_df = preprocess_frames(
-            tr_df, va_df, test_df.copy(),
-            feature_mode=feature_mode,
-            norm_mode=norm_mode,
-            n_conditions=n_conditions,
-            seed=seed,
-        )
-
         feature_cols = get_feature_cols(feature_mode)
         window_size = int(model_cfg["window_size"])
         max_rul = float(model_cfg["max_rul"])
+        train_parts: List[np.ndarray] = []
+        train_target_parts: List[np.ndarray] = []
+        val_parts: List[np.ndarray] = []
+        val_target_parts: List[np.ndarray] = []
+        test_parts: List[np.ndarray] = []
+        test_target_parts: List[np.ndarray] = []
 
-        x_train, y_train = make_windows(tr_df, feature_cols, window_size, 1, max_rul)
-        x_val, y_val = make_windows(va_df, feature_cols, window_size, 1, max_rul)
+        for entry in fd_entries:
+            fd_name = entry["fd_name"]
+            train_df, test_df, rul_test = load_fd(extract_dir, fd_name)
+            train_df, test_df, rul_test = _filter_fd_frames(
+                train_df,
+                test_df,
+                rul_test,
+                entry.get("unit_ids"),
+            )
+            train_df = add_train_rul(train_df)
 
-        test_targets = {
-            uid: float(rul_test[i])
-            for i, uid in enumerate(sorted(te_df["unit"].unique().tolist()))
-        }
-        x_test, y_test, _ = make_last_windows(
-            te_df, feature_cols, test_targets, window_size, max_rul,
-        )
+            train_units, val_units = choose_val_units(
+                train_df["unit"].unique(), seed=seed, frac=val_split,
+            )
+            tr_df = train_df[train_df["unit"].isin(train_units)].copy()
+            va_df = train_df[train_df["unit"].isin(val_units)].copy()
+
+            tr_df, va_df, te_df = preprocess_frames(
+                tr_df,
+                va_df,
+                test_df.copy(),
+                feature_mode=feature_mode,
+                norm_mode=norm_mode,
+                n_conditions=FD_CONFIGS[fd_name]["n_conditions"],
+                seed=seed,
+            )
+
+            x_train, y_train = make_windows(tr_df, feature_cols, window_size, 1, max_rul)
+            x_val, y_val = make_windows(va_df, feature_cols, window_size, 1, max_rul)
+
+            test_targets = {
+                int(uid): float(rul_test[i])
+                for i, uid in enumerate(sorted(te_df["unit"].unique().tolist()))
+            }
+            x_test, y_test, _ = make_last_windows(
+                te_df, feature_cols, test_targets, window_size, max_rul,
+            )
+
+            x_train, y_train = cap_array_splits(x_train, y_train, max_sections=entry.get("max_sections"))
+            x_val, y_val = cap_array_splits(x_val, y_val, max_sections=entry.get("max_sections"))
+            x_test, y_test = cap_array_splits(x_test, y_test, max_sections=entry.get("max_sections"))
+
+            train_parts.append(x_train)
+            train_target_parts.append(y_train)
+            val_parts.append(x_val)
+            val_target_parts.append(y_val)
+            test_parts.append(x_test)
+            test_target_parts.append(y_test)
+
+        x_train = np.concatenate(train_parts, axis=0)
+        y_train = np.concatenate(train_target_parts, axis=0)
+        x_val = np.concatenate(val_parts, axis=0)
+        y_val = np.concatenate(val_target_parts, axis=0)
+        x_test = np.concatenate(test_parts, axis=0)
+        y_test = np.concatenate(test_target_parts, axis=0)
 
         out = Path(artifacts_dir)
         out.mkdir(parents=True, exist_ok=True)
@@ -379,10 +468,11 @@ class MambaSLCmapssPlugin(ModelPlugin):
                 version=model_version,
                 uri=str(dst_pt),
                 framework="pytorch",
-                description=f"MambaSL C-MAPSS {spec['dataset'].get('config', {}).get('fd_name', '')}",
+                description=f"MambaSL C-MAPSS {cmapss_fd_summary(normalize_cmapss_fd_entries(spec['dataset'].get('config', {}), context='dataset.config'))}",
                 parameters={
                     "metrics": eval_result.metrics,
                     "config": _build_cfg(spec),
+                    "dataset": spec["dataset"].get("config", {}),
                 },
             )
         except Exception:
@@ -525,8 +615,12 @@ class MambaSLCmapssPlugin(ModelPlugin):
         from kfp_workflow.tune.exceptions import TrialPruned
 
         # --- Data loading & preprocessing (cached across trials) ----------
+        fd_entries = normalize_cmapss_fd_entries(
+            spec["dataset"].get("config", {}),
+            context="dataset.config",
+        )
         cache_key = (
-            spec["dataset"].get("config", {}).get("fd_name", "FD001"),
+            cmapss_fd_signature(fd_entries),
             int(params.get("window_size", 50)),
             float(params.get("max_rul", 125.0)),
         )

@@ -68,7 +68,8 @@ model:
 
 dataset:
   config:
-    fd_name: FD001     # → --set dataset.config.fd_name=FD003
+    fd:
+      - fd_name: FD001 # → --set dataset.config.fd[0].fd_name=FD003
 
 runtime:
   use_gpu: false       # → --set runtime.use_gpu=true
@@ -113,7 +114,7 @@ kfp-workflow pipeline compile \
 kfp-workflow pipeline submit \
     --spec configs/pipelines/mambasl_cmapss_smoke.yaml \
     --set train.max_epochs=100 \
-    --set dataset.config.fd_name=FD003
+    --set dataset.config.fd[0].fd_name=FD003
 ```
 
 제출 시 자동으로 컴파일되므로, 별도의 컴파일 단계 없이 바로 변형 실행이 가능합니다.
@@ -184,7 +185,7 @@ kfp-workflow tune show-space \
 **dataset.config 스키마:**
 | 필드 | 타입 | 기본값 | 설명 |
 |------|------|--------|------|
-| `fd_name` | str | FD001 | C-MAPSS 데이터셋 |
+| `fd` | list[dict] | — | FD 선택 리스트 (`fd_name`, `unit_ids?`, `max_sections?`) |
 | `download_policy` | str | if_missing | 다운로드 정책 |
 | `feature_mode` | str | settings_plus_sensors | 특성 모드 |
 | `norm_mode` | str | condition_minmax | 정규화 모드 |
@@ -225,7 +226,12 @@ kfp-workflow pipeline submit \
 # 다른 데이터셋
 kfp-workflow pipeline submit \
     --spec configs/pipelines/mambasl_cmapss_smoke.yaml \
-    --set dataset.config.fd_name=FD003
+    --set dataset.config.fd[0].fd_name=FD003
+
+# 두 번째 FD 추가
+kfp-workflow pipeline submit \
+    --spec configs/pipelines/mambasl_cmapss_smoke.yaml \
+    --set dataset.config.fd[1].fd_name=FD003
 
 # 학습률 변경
 kfp-workflow pipeline submit \
