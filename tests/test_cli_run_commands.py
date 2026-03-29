@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from kfp_server_api.exceptions import ApiException
 from typer.testing import CliRunner
 
 from kfp_workflow.cli.main import app
@@ -42,6 +43,10 @@ def _mock_experiment(
     exp.created_at = "2026-03-22T00:00:00Z"
     exp.last_run_created_at = "2026-03-22T01:00:00Z"
     return exp
+
+
+def _not_found() -> ApiException:
+    return ApiException(status=404, reason="Not Found")
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +89,26 @@ def test_run_get_json(mock_conn, mock_workflow):
     assert data["workflow_name"] == "workflow-123"
 
 
+@patch("kfp_workflow.cli.main._find_workflow_for_run")
+@patch("kfp_workflow.pipeline.connection.kfp_connection")
+def test_run_get_resolves_unique_short_prefix(mock_conn, mock_workflow):
+    mock_client = MagicMock()
+    full_run = _mock_run(run_id="abc-12345-def", display_name="test-run")
+    mock_client.get_run.side_effect = [_not_found(), full_run]
+    response = MagicMock()
+    response.runs = [full_run]
+    response.next_page_token = ""
+    mock_client.list_runs.return_value = response
+    mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+    mock_workflow.return_value = None
+
+    result = runner.invoke(app, ["pipeline", "run", "get", "abc"])
+    assert result.exit_code == 0
+    assert "abc-12345-def" in result.output
+    assert mock_client.get_run.call_args_list[-1].kwargs == {"run_id": "abc-12345-def"}
+
+
 # ---------------------------------------------------------------------------
 # pipeline run list
 # ---------------------------------------------------------------------------
@@ -123,12 +148,30 @@ def test_run_list_empty(mock_conn):
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
 def test_run_terminate(mock_conn):
     mock_client = MagicMock()
+    mock_client.get_run.return_value = _mock_run()
     mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
 
     result = runner.invoke(app, ["pipeline", "run", "terminate", "abc-12345-def"])
     assert result.exit_code == 0
     assert "terminated" in result.output
+    mock_client.terminate_run.assert_called_once_with("abc-12345-def")
+
+
+@patch("kfp_workflow.pipeline.connection.kfp_connection")
+def test_run_terminate_resolves_unique_short_prefix(mock_conn):
+    mock_client = MagicMock()
+    full_run = _mock_run(run_id="abc-12345-def")
+    mock_client.get_run.side_effect = [_not_found(), full_run]
+    response = MagicMock()
+    response.runs = [full_run]
+    response.next_page_token = ""
+    mock_client.list_runs.return_value = response
+    mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+
+    result = runner.invoke(app, ["pipeline", "run", "terminate", "abc"])
+    assert result.exit_code == 0
     mock_client.terminate_run.assert_called_once_with("abc-12345-def")
 
 
@@ -140,6 +183,7 @@ def test_run_terminate(mock_conn):
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
 def test_run_wait_success(mock_conn, mock_workflow):
     mock_client = MagicMock()
+    mock_client.get_run.return_value = _mock_run()
     mock_client.wait_for_run_completion.return_value = _mock_run(state_value="SUCCEEDED")
     mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
@@ -158,6 +202,7 @@ def test_run_wait_success(mock_conn, mock_workflow):
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
 def test_run_wait_failure(mock_conn, mock_workflow):
     mock_client = MagicMock()
+    mock_client.get_run.return_value = _mock_run()
     mock_client.wait_for_run_completion.return_value = _mock_run(state_value="FAILED")
     mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
@@ -171,6 +216,7 @@ def test_run_wait_failure(mock_conn, mock_workflow):
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
 def test_run_wait_timeout_shows_workflow_diagnostics(mock_conn, mock_workflow):
     mock_client = MagicMock()
+    mock_client.get_run.return_value = _mock_run()
     mock_client.wait_for_run_completion.side_effect = TimeoutError("timed out")
     mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
@@ -192,6 +238,26 @@ def test_run_wait_timeout_shows_workflow_diagnostics(mock_conn, mock_workflow):
     assert "save-model" in result.output
 
 
+@patch("kfp_workflow.cli.main._find_workflow_for_run")
+@patch("kfp_workflow.pipeline.connection.kfp_connection")
+def test_run_wait_resolves_unique_short_prefix(mock_conn, mock_workflow):
+    mock_client = MagicMock()
+    full_run = _mock_run(run_id="abc-12345-def", state_value="SUCCEEDED")
+    mock_client.get_run.side_effect = [_not_found(), full_run]
+    response = MagicMock()
+    response.runs = [full_run]
+    response.next_page_token = ""
+    mock_client.list_runs.return_value = response
+    mock_client.wait_for_run_completion.return_value = full_run
+    mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+    mock_workflow.return_value = None
+
+    result = runner.invoke(app, ["pipeline", "run", "wait", "abc"])
+    assert result.exit_code == 0
+    mock_client.wait_for_run_completion.assert_called_once_with("abc-12345-def", timeout=3600)
+
+
 # ---------------------------------------------------------------------------
 # pipeline experiment list
 # ---------------------------------------------------------------------------
@@ -208,6 +274,25 @@ def test_experiment_list(mock_conn):
     result = runner.invoke(app, ["pipeline", "experiment", "list"])
     assert result.exit_code == 0
     assert "test-experiment" in result.output
+
+
+@patch("kfp_workflow.pipeline.connection.kfp_connection")
+def test_run_list_resolves_experiment_short_prefix(mock_conn):
+    mock_client = MagicMock()
+    response = MagicMock()
+    response.experiments = [_mock_experiment(experiment_id="exp-001-full")]
+    response.next_page_token = ""
+    mock_client.list_experiments.return_value = response
+    runs_response = MagicMock()
+    runs_response.runs = [_mock_run()]
+    mock_client.list_runs.return_value = runs_response
+    mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+
+    result = runner.invoke(app, ["pipeline", "run", "list", "--experiment-id", "exp-001"])
+    assert result.exit_code == 0
+    assert "test-run" in result.output
+    assert mock_client.list_runs.call_args.kwargs["experiment_id"] == "exp-001-full"
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +359,37 @@ def test_benchmark_get(mock_conn, mock_find, mock_is_benchmark, mock_extract, mo
 @patch("kfp_workflow.benchmark.history.is_benchmark_workflow")
 @patch("kfp_workflow.benchmark.history.find_workflow_for_run")
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
+def test_benchmark_get_resolves_unique_short_prefix(mock_conn, mock_find, mock_is_benchmark, mock_extract, mock_resolve):
+    mock_client = MagicMock()
+    full_run = _mock_run(run_id="bench-12345-full", display_name="bench-run")
+    mock_client.get_run.side_effect = [_not_found(), full_run]
+    response = MagicMock()
+    response.runs = [full_run]
+    response.next_page_token = ""
+    mock_client.list_runs.return_value = response
+    mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+
+    workflow = {"metadata": {"name": "workflow-123"}, "status": {"phase": "Succeeded", "progress": "4/4"}}
+    mock_find.return_value = workflow
+    mock_is_benchmark.return_value = True
+    mock_extract.return_value = {"metadata": {"name": "mambasl-cmapss-benchmark-smoke"}}
+    mock_resolve.return_value = {
+        "results_path": "/mnt/results/bench/results.json",
+        "summary": {"status": "succeeded", "request_count": 5},
+        "payload": {"status": "succeeded"},
+    }
+
+    result = runner.invoke(app, ["benchmark", "get", "bench-123"])
+    assert result.exit_code == 0
+    assert "bench-12345-full" in result.output
+
+
+@patch("kfp_workflow.benchmark.history.resolve_results")
+@patch("kfp_workflow.benchmark.history.extract_benchmark_spec")
+@patch("kfp_workflow.benchmark.history.is_benchmark_workflow")
+@patch("kfp_workflow.benchmark.history.find_workflow_for_run")
+@patch("kfp_workflow.pipeline.connection.kfp_connection")
 def test_benchmark_download(mock_conn, mock_find, mock_is_benchmark, mock_extract, mock_resolve, tmp_path: Path):
     mock_client = MagicMock()
     mock_client.get_run.return_value = _mock_run(run_id="bench-123", display_name="bench-run")
@@ -297,6 +413,37 @@ def test_benchmark_download(mock_conn, mock_find, mock_is_benchmark, mock_extrac
     saved = json.loads(output.read_text("utf-8"))
     assert saved["status"] == "succeeded"
     assert "downloaded" in result.output.lower()
+
+
+@patch("kfp_workflow.benchmark.history.resolve_results")
+@patch("kfp_workflow.benchmark.history.extract_benchmark_spec")
+@patch("kfp_workflow.benchmark.history.is_benchmark_workflow")
+@patch("kfp_workflow.benchmark.history.find_workflow_for_run")
+@patch("kfp_workflow.pipeline.connection.kfp_connection")
+def test_benchmark_download_resolves_unique_short_prefix(mock_conn, mock_find, mock_is_benchmark, mock_extract, mock_resolve, tmp_path: Path):
+    mock_client = MagicMock()
+    full_run = _mock_run(run_id="bench-12345-full", display_name="bench-run")
+    mock_client.get_run.side_effect = [_not_found(), full_run]
+    response = MagicMock()
+    response.runs = [full_run]
+    response.next_page_token = ""
+    mock_client.list_runs.return_value = response
+    mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+
+    workflow = {"metadata": {"name": "workflow-123"}, "status": {"phase": "Succeeded"}}
+    mock_find.return_value = workflow
+    mock_is_benchmark.return_value = True
+    mock_extract.return_value = {"metadata": {"name": "mambasl-cmapss-benchmark-smoke"}}
+    mock_resolve.return_value = {
+        "results_path": "/mnt/results/bench/results.json",
+        "summary": {"status": "succeeded"},
+        "payload": {"status": "succeeded"},
+    }
+
+    result = runner.invoke(app, ["benchmark", "download", "bench-123", "--output", str(tmp_path / "out.json")])
+    assert result.exit_code == 0
+    assert mock_client.get_run.call_args_list[-1].kwargs == {"run_id": "bench-12345-full"}
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import typer
+from kfp_server_api.exceptions import ApiException
 
 # Suppress noisy third-party deprecation warnings that are not actionable
 warnings.filterwarnings("ignore", category=FutureWarning, module="google")
@@ -116,6 +117,105 @@ def _augment_run_payload(run: Any, workflow: Optional[Dict[str, Any]]) -> Dict[s
             "failed_nodes": workflow_summary["failed_nodes"],
         })
     return payload
+
+
+def _iter_runs(
+    client: Any,
+    *,
+    namespace: str,
+    experiment_id: Optional[str] = None,
+    page_size: int = 100,
+    sort_by: str = "created_at desc",
+) -> List[Any]:
+    """Return all visible runs for ID-prefix resolution."""
+    runs: List[Any] = []
+    page_token = ""
+    while True:
+        response = client.list_runs(
+            page_size=page_size,
+            sort_by=sort_by,
+            experiment_id=experiment_id,
+            namespace=namespace,
+            page_token=page_token,
+        )
+        batch = list(response.runs or [])
+        runs.extend(batch)
+        raw_next_page_token = getattr(response, "next_page_token", "")
+        page_token = raw_next_page_token if isinstance(raw_next_page_token, str) else ""
+        if not page_token:
+            return runs
+
+
+def _iter_experiments(
+    client: Any,
+    *,
+    namespace: str,
+    page_size: int = 100,
+    sort_by: str = "created_at desc",
+) -> List[Any]:
+    """Return all visible experiments for ID-prefix resolution."""
+    experiments: List[Any] = []
+    page_token = ""
+    while True:
+        response = client.list_experiments(
+            page_size=page_size,
+            sort_by=sort_by,
+            namespace=namespace,
+            page_token=page_token,
+        )
+        batch = list(response.experiments or [])
+        experiments.extend(batch)
+        raw_next_page_token = getattr(response, "next_page_token", "")
+        page_token = raw_next_page_token if isinstance(raw_next_page_token, str) else ""
+        if not page_token:
+            return experiments
+
+
+def _resolve_unique_id_prefix(
+    raw_id: str,
+    candidates: List[str],
+    *,
+    kind: str,
+) -> str:
+    """Resolve a user-supplied full ID or unique prefix."""
+    exact_matches = [candidate for candidate in candidates if candidate == raw_id]
+    if exact_matches:
+        return exact_matches[0]
+
+    prefix_matches = [candidate for candidate in candidates if candidate.startswith(raw_id)]
+    if len(prefix_matches) == 1:
+        return prefix_matches[0]
+    if not prefix_matches:
+        raise typer.BadParameter(f"No {kind} found matching ID or prefix '{raw_id}'.")
+    preview = ", ".join(match[:8] for match in prefix_matches[:5])
+    raise typer.BadParameter(
+        f"ID prefix '{raw_id}' matches multiple {kind}s: {preview}"
+    )
+
+
+def _resolve_run(client: Any, *, run_id: str, namespace: str) -> Any:
+    """Resolve a full run ID or unique prefix and return the run object."""
+    try:
+        run = client.get_run(run_id=run_id)
+        resolved = getattr(run, "run_id", None)
+        if isinstance(resolved, str) and resolved:
+            return run
+    except ApiException as exc:
+        if getattr(exc, "status", None) != 404:
+            raise
+    candidates = [str(run.run_id) for run in _iter_runs(client, namespace=namespace) if getattr(run, "run_id", None)]
+    resolved_run_id = _resolve_unique_id_prefix(run_id, candidates, kind="run")
+    return client.get_run(run_id=resolved_run_id)
+
+
+def _resolve_experiment_id(client: Any, *, experiment_id: str, namespace: str) -> str:
+    """Resolve a full experiment ID or unique prefix against visible experiments."""
+    candidates = [
+        str(experiment.experiment_id)
+        for experiment in _iter_experiments(client, namespace=namespace)
+        if getattr(experiment, "experiment_id", None)
+    ]
+    return _resolve_unique_id_prefix(experiment_id, candidates, kind="experiment")
 
 
 def _log_for_pod(v1: Any, pod: Any, namespace: str) -> str:
@@ -379,11 +479,12 @@ def cmd_benchmark_get(
         namespace=namespace, host=host, user=user,
         existing_token=existing_token, cookies=cookies,
     ) as client:
-        run = client.get_run(run_id=run_id)
+        run = _resolve_run(client, run_id=run_id, namespace=namespace)
+        resolved_run_id = run.run_id
 
-    workflow = find_workflow_for_run(run_id, namespace)
+    workflow = find_workflow_for_run(resolved_run_id, namespace)
     if not workflow or not is_benchmark_workflow(workflow):
-        typer.echo(f"Run '{run_id}' is not a benchmark workflow.", err=True)
+        typer.echo(f"Run '{resolved_run_id}' is not a benchmark workflow.", err=True)
         raise typer.Exit(code=1)
 
     benchmark_spec = extract_benchmark_spec(workflow) or {}
@@ -465,11 +566,12 @@ def cmd_benchmark_download(
         namespace=namespace, host=host, user=user,
         existing_token=existing_token, cookies=cookies,
     ) as client:
-        run = client.get_run(run_id=run_id)
+        run = _resolve_run(client, run_id=run_id, namespace=namespace)
+        resolved_run_id = run.run_id
 
-    workflow = find_workflow_for_run(run_id, namespace)
+    workflow = find_workflow_for_run(resolved_run_id, namespace)
     if not workflow or not is_benchmark_workflow(workflow):
-        typer.echo(f"Run '{run_id}' is not a benchmark workflow.", err=True)
+        typer.echo(f"Run '{resolved_run_id}' is not a benchmark workflow.", err=True)
         raise typer.Exit(code=1)
 
     benchmark_spec = extract_benchmark_spec(workflow) or {}
@@ -480,12 +582,12 @@ def cmd_benchmark_download(
         namespace=namespace,
     )
 
-    destination = output or Path.cwd() / f"{benchmark_name}-{run_id}.json"
+    destination = output or Path.cwd() / f"{benchmark_name}-{resolved_run_id}.json"
     ensure_parent(destination)
     dump_json(results["payload"], destination)
 
     payload = {
-        "run_id": run_id,
+        "run_id": resolved_run_id,
         "benchmark_name": benchmark_name,
         "results_path": results["results_path"],
         "output_path": str(destination),
@@ -577,10 +679,11 @@ def cmd_run_get(
         namespace=namespace, host=host, user=user,
         existing_token=existing_token, cookies=cookies,
     ) as client:
-        run = client.get_run(run_id=run_id)
+        run = _resolve_run(client, run_id=run_id, namespace=namespace)
+        resolved_run_id = run.run_id
 
     state = _run_state_str(run.state)
-    workflow = _find_workflow_for_run(run_id=run_id, namespace=namespace)
+    workflow = _find_workflow_for_run(run_id=resolved_run_id, namespace=namespace)
     payload = _augment_run_payload(run, workflow)
 
     if _json_output:
@@ -642,10 +745,14 @@ def cmd_run_list(
         namespace=namespace, host=host, user=user,
         existing_token=existing_token, cookies=cookies,
     ) as client:
+        resolved_experiment_id = (
+            _resolve_experiment_id(client, experiment_id=experiment_id, namespace=namespace)
+            if experiment_id else None
+        )
         response = client.list_runs(
             page_size=page_size,
             sort_by=sort_by,
-            experiment_id=experiment_id,
+            experiment_id=resolved_experiment_id,
             namespace=namespace,
         )
 
@@ -703,14 +810,16 @@ def cmd_run_wait(
             namespace=namespace, host=host, user=user,
             existing_token=existing_token, cookies=cookies,
         ) as client:
-            with console.status(f"Waiting for run {run_id[:8]}..."):
-                run = client.wait_for_run_completion(run_id, timeout=timeout)
+            resolved_run = _resolve_run(client, run_id=run_id, namespace=namespace)
+            resolved_run_id = resolved_run.run_id
+            with console.status(f"Waiting for run {resolved_run_id[:8]}..."):
+                run = client.wait_for_run_completion(resolved_run_id, timeout=timeout)
     except TimeoutError:
         workflow_summary = _workflow_summary(
-            _find_workflow_for_run(run_id=run_id, namespace=namespace)
+            _find_workflow_for_run(run_id=resolved_run_id, namespace=namespace)
         )
         console.print(
-            f"Run {run_id[:8]} did not reach a terminal KFP state within {timeout}s.",
+            f"Run {resolved_run_id[:8]} did not reach a terminal KFP state within {timeout}s.",
             style="yellow",
         )
         if workflow_summary:
@@ -734,10 +843,10 @@ def cmd_run_wait(
         raise typer.Exit(code=1)
 
     state = _run_state_str(run.state)
-    console.print(f"Run {run_id[:8]} finished: {style_run_state(state)}")
+    console.print(f"Run {resolved_run_id[:8]} finished: {style_run_state(state)}")
 
     workflow_summary = _workflow_summary(
-        _find_workflow_for_run(run_id=run_id, namespace=namespace)
+        _find_workflow_for_run(run_id=resolved_run_id, namespace=namespace)
     )
     if workflow_summary and workflow_summary["phase"]:
         console.print(
@@ -780,9 +889,10 @@ def cmd_run_terminate(
         namespace=namespace, host=host, user=user,
         existing_token=existing_token, cookies=cookies,
     ) as client:
-        client.terminate_run(run_id)
+        resolved_run_id = _resolve_run(client, run_id=run_id, namespace=namespace).run_id
+        client.terminate_run(resolved_run_id)
 
-    typer.echo(f"Run {run_id[:8]} terminated.")
+    typer.echo(f"Run {resolved_run_id[:8]} terminated.")
 
 
 @run_app.command("logs")
@@ -800,13 +910,19 @@ def cmd_run_logs(
     from kubernetes import config as k8s_config
 
     from kfp_workflow.cli.output import console
+    from kfp_workflow.pipeline.connection import kfp_connection
+
+    with kfp_connection(
+        namespace=namespace,
+        user="user@example.com",
+    ) as client:
+        resolved_run_id = _resolve_run(client, run_id=run_id, namespace=namespace).run_id
 
     k8s_config.load_kube_config()
     v1 = k8s_client.CoreV1Api()
-
     pods = v1.list_namespaced_pod(
         namespace=namespace,
-        label_selector=f"pipeline/runid={run_id}",
+        label_selector=f"pipeline/runid={resolved_run_id}",
     )
 
     # Filter to implementation pods (contain actual component output)
@@ -830,7 +946,7 @@ def cmd_run_logs(
 
     if not pods_to_show:
         workflow_summary = _workflow_summary(
-            _find_workflow_for_run(run_id=run_id, namespace=namespace)
+            _find_workflow_for_run(run_id=resolved_run_id, namespace=namespace)
         )
         if workflow_summary:
             typer.echo(
