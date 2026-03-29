@@ -138,7 +138,7 @@ Built-in benchmark pieces included in this repo:
 - `sequential-replay` — Sends one section at a time to the benchmark `InferenceService`
 - `kepler-energy` — Reads `kepler_container_joules_total` from Prometheus/Kepler for the predictor container
 
-The shipped smoke benchmark is `configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml`. It deploys `mambasl-cmapss`, replays 5 FD001 windows at 1 Hz, and writes `results.json` under `benchmark-results/` on the benchmark PVC.
+The shipped smoke benchmark is `configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml`. It deploys `mambasl-cmapss`, replays one `fd[]` entry for FD001 with `unit_ids: [1, 2, 3]` and `max_sections: 5` at 1 Hz, and writes `results.json` under `benchmark-results/` on the benchmark PVC.
 
 ```bash
 kfp-workflow cluster bootstrap \
@@ -177,6 +177,10 @@ kfp-workflow pipeline submit --spec configs/pipelines/mambasl_cmapss_smoke.yaml 
 kfp-workflow pipeline compile --spec configs/pipelines/mambasl_cmapss_smoke.yaml \
     --output pipelines/fd003.yaml \
     --set dataset.config.fd[0].fd_name=FD003
+
+# Add a second FD entry
+kfp-workflow pipeline submit --spec configs/pipelines/mambasl_cmapss_smoke.yaml \
+    --set dataset.config.fd[1].fd_name=FD003
 ```
 
 **Precedence:** CLI `--set` > YAML spec > plugin defaults.

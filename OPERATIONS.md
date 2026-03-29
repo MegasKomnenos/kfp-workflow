@@ -345,14 +345,16 @@ kfp-workflow benchmark download <run_id>
 # Example validated on 2026-03-29:
 # run_id: ba893c5b-14bb-4fde-8229-a040127ee36e
 # workflow: mambasl-cmapss-benchmark-smoke-2nx2f
-# results file:
-# /opt/local-path-provisioner/pvc-bffb4b4d-0996-423e-b3b3-d0c80f041d5b_kubeflow-user-example-com_benchmark-store/benchmark-results/mambasl-cmapss-benchmark-smoke/20260329T103020-mambasl-cmapss-benchmark-smoke-2nx2f-metadata-1-0-system-contai/results.json
+# downloaded file:
+# ./mambasl-cmapss-benchmark-smoke-ba893c5b-14bb-4fde-8229-a040127ee36e.json
 ```
 
 Expected smoke result:
 - `status == "succeeded"`
 - `scenario.request_count == 5`
 - `metrics.metric_0.delta_joules > 0`
+
+Use direct PVC path inspection only for troubleshooting after `benchmark get/download`.
 
 Notes:
 - Benchmark tasks compile with KFP caching disabled. Cached deploy/wait outputs are invalid for side-effectful benchmark runs.
