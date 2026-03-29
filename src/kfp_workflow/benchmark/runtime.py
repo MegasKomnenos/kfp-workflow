@@ -108,7 +108,8 @@ class CmapssTimeseriesDatasetSource(DatasetSource):
             )
         )
         section_stride = int(self._config.get("section_stride", 1))
-        max_sections = int(self._config.get("max_sections", 5))
+        raw_max_sections = self._config.get("max_sections")
+        max_sections = None if raw_max_sections is None else int(raw_max_sections)
 
         train_df, test_df, _ = load_fd(Path(data_dir), fd_name)
         _, _, te_df = preprocess_frames(
@@ -154,7 +155,7 @@ class CmapssTimeseriesDatasetSource(DatasetSource):
                     "end_index": int(end - 1),
                 }
                 count += 1
-                if count >= max_sections:
+                if max_sections is not None and count >= max_sections:
                     return
 
 

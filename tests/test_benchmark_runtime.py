@@ -87,6 +87,19 @@ def test_cmapss_timeseries_dataset_source_yields_sections(tmp_path: Path):
     assert len(sections[0]["payload"][0]) == 17
 
 
+def test_cmapss_timeseries_dataset_source_has_no_default_section_cap(tmp_path: Path):
+    spec = _runtime_spec(tmp_path)
+    spec["scenario"]["dataset"]["config"].pop("max_sections", None)
+    spec["scenario"]["dataset"]["config"]["unit_ids"] = [1, 2]
+    dataset = CmapssTimeseriesDatasetSource(spec, spec["scenario"]["dataset"]["config"])
+
+    sections = list(dataset.iter_sections())
+
+    assert len(sections) == 6
+    assert sections[-1]["unit"] == 2
+    assert sections[-1]["start_index"] == 2
+
+
 def test_sequential_replay_pipeline_replays_sections(monkeypatch, tmp_path: Path):
     class _Dataset:
         def iter_sections(self):
