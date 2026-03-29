@@ -1,13 +1,14 @@
 # kfp-workflow
 
-KFP v2 training pipeline and KServe serving workflow manager.
+KFP v2 training, benchmark, and KServe serving workflow manager.
 
 ## Scope
 
 Two-part ML workflow on Kubeflow:
 
 1. **Training pipeline** — Compile and submit a KFP v2 pipeline that loads data from PVC, preprocesses, trains a model, evaluates, and saves weights.
-2. **Inference serving** — Deploy any trained model as a KServe InferenceService (custom or standard runtime).
+2. **Benchmark workflow** — Deploy a model as a temporary KServe `InferenceService`, replay a scenario against it, collect metrics, and persist benchmark results to PVC.
+3. **Inference serving** — Deploy any trained model as a KServe InferenceService (custom or standard runtime).
 
 Both parts use file-backed registries for model and dataset management, with PVC-based storage.
 
@@ -51,6 +52,10 @@ kfp-workflow [--json]                                       # Global: JSON outpu
 kfp-workflow pipeline compile   --spec <path> --output <path> [--set key=value ...]
 kfp-workflow pipeline submit    --spec <path> [--namespace] [--host] [--user] [--existing-token] [--cookies] [--set key=value ...]
 
+# Benchmark lifecycle
+kfp-workflow benchmark compile  --spec <path> --output <path> [--set key=value ...]
+kfp-workflow benchmark submit   --spec <path> [--namespace] [--host] [--user] [--existing-token] [--cookies] [--set key=value ...]
+
 # Pipeline run monitoring
 kfp-workflow pipeline run get       <run_id>   [--namespace] [--host] [--user]
 kfp-workflow pipeline run list                 [--namespace] [--experiment-id] [--page-size] [--sort-by]
@@ -81,8 +86,8 @@ kfp-workflow tune katib          --spec <path> [--set key=value ...] [--dry-run]
 kfp-workflow tune show-space     --spec <path> [--set key=value ...]
 
 # Infrastructure
-kfp-workflow cluster bootstrap  --spec <path> [--dry-run]
-kfp-workflow spec validate      --spec <path> [--type {pipeline,serving,tune}] [--set key=value ...]
+kfp-workflow cluster bootstrap  --spec <path> [--type {pipeline,benchmark}] [--dry-run]
+kfp-workflow spec validate      --spec <path> [--type {pipeline,serving,tune,benchmark}] [--set key=value ...]
 ```
 
 ## Pipeline DAG
@@ -95,8 +100,9 @@ All components receive a serialised `PipelineSpec` JSON and communicate via JSON
 
 ## Configuration
 
-Pipeline, serving, and tuning behaviour is driven by YAML specs under `configs/`:
+Pipeline, benchmark, serving, and tuning behaviour is driven by YAML specs under `configs/`:
 - `configs/pipelines/` — Training pipeline specs (validated as `PipelineSpec`)
+- `configs/benchmarks/` — Benchmark specs, scenario refs, and metric refs (validated as `BenchmarkSpec`)
 - `configs/tuning/` — HPO tuning specs (validated as `TuneSpec`)
 - `configs/serving/` — Serving specs (validated as `ServingSpec`)
 
@@ -110,6 +116,39 @@ Pipeline, serving, and tuning behaviour is driven by YAML specs under `configs/`
 **ServingSpec** supports:
 - `runtime: custom` — Uses custom container predictor with `predictor_image`
 - `runtime: kserve-torchserve` — Standard KServe runtime with PVC storage
+
+**BenchmarkSpec** supports:
+- `model` — Temporary serving target, deployed as a KServe `InferenceService`
+- `scenario` — Dataset + replay pipeline, defined inline, by YAML ref, or by Python symbol
+- `metrics` — One or more collectors, defined inline, by YAML ref, or by Python symbol
+- `storage.results_pvc` — Dedicated PVC for benchmark result payloads
+
+### Benchmark Runtime Model
+
+A benchmark is a bundle of:
+- `model` — The deployable inference target
+- `scenario` — The dataset source plus the activity pipeline that drives requests
+- `metrics` — Collectors that observe the benchmark target while the scenario runs
+
+Built-in benchmark pieces included in this repo:
+- `cmapss-timeseries` — Replay-ready multivariate time-series sections from C-MAPSS
+- `sequential-replay` — Sends one section at a time to the benchmark `InferenceService`
+- `kepler-energy` — Reads `kepler_container_joules_total` from Prometheus/Kepler for the predictor container
+
+The shipped smoke benchmark is `configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml`. It deploys `mambasl-cmapss`, replays 5 FD001 windows at 1 Hz, and writes `results.json` to the benchmark PVC.
+
+```bash
+kfp-workflow cluster bootstrap \
+  --type benchmark \
+  --spec configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml
+
+kfp-workflow benchmark compile \
+  --spec configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml \
+  --output pipelines/mambasl_cmapss_kepler_smoke.yaml
+
+kfp-workflow benchmark submit \
+  --spec configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml
+```
 
 ### CLI Config Overrides (`--set`)
 
@@ -181,6 +220,7 @@ Energy and infrastructure monitoring is deployed on the cluster:
 - **Kepler** — Per-container energy consumption via Intel RAPL (CPU) and NVML (GPU)
 
 The Kepler dashboard in Grafana shows real-time power consumption at node, pod, and container granularity.
+The benchmark workflow queries Kepler metrics through Prometheus and persists the benchmark result payload to the benchmark PVC.
 
 ## Registries
 

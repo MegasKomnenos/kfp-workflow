@@ -33,6 +33,7 @@ python -m pytest tests/ -v
 kfp-workflow spec validate --spec configs/pipelines/mambasl_cmapss_smoke.yaml
 kfp-workflow spec validate --spec configs/serving/mambasl_cmapss_serve.yaml --type serving
 kfp-workflow spec validate --spec configs/tuning/mambasl_cmapss_tune.yaml --type tune
+kfp-workflow spec validate --spec configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml --type benchmark
 
 # MR-HY-SP
 kfp-workflow spec validate --spec configs/pipelines/mrhysp_cmapss_smoke.yaml
@@ -56,6 +57,18 @@ kfp-workflow pipeline compile \
 kfp-workflow pipeline compile \
   --spec configs/pipelines/softs_cmapss_smoke.yaml \
   --output pipelines/softs_cmapss_smoke.yaml
+```
+
+### Compile and submit a benchmark
+```bash
+kfp-workflow benchmark compile \
+  --spec configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml \
+  --output pipelines/mambasl_cmapss_kepler_smoke.yaml
+
+kfp-workflow benchmark submit \
+  --spec configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml
+
+kfp-workflow pipeline run wait <run_id>
 ```
 
 ### Hyperparameter tuning
@@ -106,8 +119,45 @@ kfp-workflow --json tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
 docker build -t kfp-workflow:latest -f docker/Dockerfile .
 
 # Preferred: push a tagged image to a registry and reference that tag in specs
-# Fallback for local clusters: import into containerd for k8s
-docker save kfp-workflow:latest | sudo ctr -n k8s.io images import -
+# Fallback for local clusters: save and import into node containerd
+docker save kfp-workflow:latest -o /tmp/kfp-workflow-latest.tar
+
+# This environment does not allow direct host access to containerd.
+# Import through a privileged helper pod instead.
+kubectl create ns image-loader || true
+kubectl apply -f - <<'YAML'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kfp-benchmark-loader
+  namespace: image-loader
+spec:
+  restartPolicy: Never
+  containers:
+  - name: nerdctl
+    image: ghcr.io/containerd/nerdctl:v2.1.6
+    command: ["sh", "-c", "sleep 3600"]
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - name: containerd-sock
+      mountPath: /run/containerd/containerd.sock
+    - name: host-tmp
+      mountPath: /host-tmp
+  volumes:
+  - name: containerd-sock
+    hostPath:
+      path: /run/containerd/containerd.sock
+      type: Socket
+  - name: host-tmp
+    hostPath:
+      path: /tmp
+      type: Directory
+YAML
+kubectl wait --for=condition=Ready pod/kfp-benchmark-loader -n image-loader --timeout=120s
+kubectl exec -n image-loader kfp-benchmark-loader -- \
+  nerdctl --address /run/containerd/containerd.sock --namespace k8s.io load -i /host-tmp/kfp-workflow-latest.tar
+kubectl delete pod -n image-loader kfp-benchmark-loader --ignore-not-found=true
 ```
 
 The Dockerfile installs:
@@ -257,6 +307,53 @@ kfp-workflow serve create \
 kfp-workflow serve create \
   --spec configs/serving/mambasl_cmapss_serve.yaml --dry-run
 ```
+
+## End-to-End Deployment (MambaSL Benchmark Smoke Test)
+
+### 1. Build and import Docker image
+```bash
+docker build -t kfp-workflow:latest -f docker/Dockerfile .
+docker save kfp-workflow:latest -o /tmp/kfp-workflow-latest.tar
+# Import with the helper pod flow shown above.
+```
+
+### 2. Bootstrap benchmark storage
+```bash
+kfp-workflow cluster bootstrap \
+  --type benchmark \
+  --spec configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml
+```
+
+### 3. Compile and submit the benchmark
+```bash
+kfp-workflow benchmark compile \
+  --spec configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml \
+  --output pipelines/mambasl_cmapss_kepler_smoke.yaml
+
+kfp-workflow benchmark submit \
+  --spec configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml
+```
+
+### 4. Wait for completion and verify result persistence
+```bash
+kfp-workflow pipeline run wait <run_id>
+
+# Example validated on 2026-03-29:
+# run_id: ba893c5b-14bb-4fde-8229-a040127ee36e
+# workflow: mambasl-cmapss-benchmark-smoke-2nx2f
+# results file:
+# /opt/local-path-provisioner/pvc-bffb4b4d-0996-423e-b3b3-d0c80f041d5b_kubeflow-user-example-com_benchmark-store/mambasl-cmapss-benchmark-smoke/20260329T103020-mambasl-cmapss-benchmark-smoke-2nx2f-metadata-1-0-system-contai/results.json
+```
+
+Expected smoke result:
+- `status == "succeeded"`
+- `scenario.request_count == 5`
+- `metrics.metric_0.delta_joules > 0`
+
+Notes:
+- Benchmark tasks compile with KFP caching disabled. Cached deploy/wait outputs are invalid for side-effectful benchmark runs.
+- The benchmark run task injects an Istio sidecar so it can reach the in-cluster KServe predictor service.
+- On this cluster, the Kepler predictor counter updates with noticeable lag. The shipped smoke metric uses `settle_seconds: 20` so the result captures a non-zero energy delta.
 
 ### 9. Test inference
 ```bash

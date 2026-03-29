@@ -12,6 +12,12 @@ test/
 ├── pyproject.toml                     # Build config, dependencies, entry points
 │
 ├── configs/
+│   ├── benchmarks/
+│   │   ├── mambasl_cmapss_kepler_smoke.yaml         # Benchmark spec: deploy MambaSL, replay C-MAPSS, collect Kepler energy
+│   │   ├── scenarios/
+│   │   │   └── mambasl_cmapss_timeseries_smoke.yaml # Scenario ref: FD001 multi-unit 1 Hz replay (5 sections)
+│   │   └── metrics/
+│   │       └── kepler_predictor_energy.yaml         # Metric ref: Kepler predictor-container energy collector
 │   ├── pipelines/
 │   │   ├── sample_train.yaml          # Example training pipeline spec
 │   │   ├── mambasl_cmapss_smoke.yaml  # MambaSL C-MAPSS smoke test (2 epochs, CPU)
@@ -84,11 +90,19 @@ test/
 ├── src/kfp_workflow/
 │   ├── __init__.py                    # Package root, __version__
 │   ├── config_override.py             # CLI --set override utilities (coerce, merge, validate)
-│   ├── specs.py                       # Pydantic config models (PipelineSpec, ServingSpec, TuneSpec)
+│   ├── specs.py                       # Pydantic config models (PipelineSpec, BenchmarkSpec, ServingSpec, TuneSpec)
 │   ├── utils.py                       # YAML/JSON I/O helpers
 │   ├── cli/
-│   │   ├── main.py                    # Typer CLI (pipeline, serve, registry, cluster, spec, tune)
+│   │   ├── main.py                    # Typer CLI (pipeline, benchmark, serve, registry, cluster, spec, tune)
 │   │   └── output.py                  # Rich-based structured output (tables, colors, JSON)
+│   ├── benchmark/
+│   │   ├── __init__.py
+│   │   ├── client.py                  # Benchmark compilation + submission
+│   │   ├── compiler.py                # Benchmark DAG assembly + KFP compilation
+│   │   ├── components.py              # Deploy / wait / run / cleanup benchmark KFP components
+│   │   ├── interfaces.py              # Standard dataset, scenario, and metric interfaces
+│   │   ├── materialize.py             # YAML/Python ref loading and benchmark spec materialization
+│   │   └── runtime.py                 # Built-in C-MAPSS replay and Kepler metric collection
 │   ├── components/
 │   │   ├── __init__.py                # Re-exports all 5 component functions
 │   │   ├── load_data.py               # KFP component: load data via plugin
@@ -117,10 +131,12 @@ test/
 │   │   └── dataset_registry.py        # PVCDatasetRegistry (JSON on PVC)
 │   └── serving/
 │       ├── __init__.py
-│       ├── kserve.py                  # KServe InferenceService CRUD + status (custom + standard)
+│       ├── kserve.py                  # KServe InferenceService CRUD + status via Kubernetes API (custom + standard)
 │       └── predictor.py               # Custom KServe predictor (plugin dispatch)
 │
 └── tests/
+    ├── test_benchmark_compile.py      # Benchmark materialization and compile tests
+    ├── test_benchmark_runtime.py      # Benchmark dataset, replay, metric, and result persistence tests
     ├── test_specs.py                  # Spec loading and validation
     ├── test_cli_protocol.py           # CLI command existence checks (all commands)
     ├── test_cli_run_commands.py       # Mocked functional tests for run/serve/experiment commands
