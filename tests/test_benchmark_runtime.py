@@ -170,6 +170,98 @@ def test_kepler_energy_metric_collector_queries_prometheus(monkeypatch):
     assert end["delta_joules"] == pytest.approx(2.5)
 
 
+def test_kepler_energy_metric_collector_waits_for_series(monkeypatch):
+    current_time = [100.0]
+    sleeps = []
+    responses = iter(
+        [
+            [],
+            [],
+            [{"value": [0, "2.0"]}],
+        ]
+    )
+
+    class _Response:
+        def __init__(self, result):
+            self._result = result
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": {"result": self._result}}
+
+    def _get(*_args, **_kwargs):
+        return _Response(next(responses))
+
+    def _sleep(seconds):
+        sleeps.append(seconds)
+        current_time[0] += seconds
+
+    monkeypatch.setattr("requests.get", _get)
+    monkeypatch.setattr("time.sleep", _sleep)
+    monkeypatch.setattr("time.time", lambda: current_time[0])
+
+    collector = KeplerEnergyMetricCollector(
+        {
+            "prometheus_url": "http://prom",
+            "series_wait_seconds": 5.0,
+            "poll_interval_seconds": 1.5,
+            "mode": "dynamic",
+        }
+    )
+    target = {"predictor_pod_name": "pod-1"}
+    spec = {"runtime": {"namespace": "kubeflow-user-example-com"}}
+
+    start = collector.start(target=target, spec=spec)
+
+    assert start["start_joules"] == 2.0
+    assert sleeps == [1.5, 1.5]
+
+
+def test_kepler_energy_metric_collector_falls_back_to_service_regex(monkeypatch):
+    queries = []
+
+    class _Response:
+        def __init__(self, result):
+            self._result = result
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": {"result": self._result}}
+
+    def _get(*_args, **kwargs):
+        query = kwargs["params"]["query"]
+        queries.append(query)
+        if 'pod_name="stale-pod"' in query:
+            return _Response([])
+        if 'pod_name=~"bench-svc-predictor-.*"' in query:
+            return _Response(
+                [
+                    {
+                        "metric": {"pod_name": "bench-svc-predictor-live"},
+                        "value": [0, "5.5"],
+                    }
+                ]
+            )
+        raise AssertionError(f"unexpected query: {query}")
+
+    monkeypatch.setattr("requests.get", _get)
+
+    collector = KeplerEnergyMetricCollector({"prometheus_url": "http://prom", "mode": "dynamic"})
+    target = {"predictor_pod_name": "stale-pod", "service_name": "bench-svc"}
+    spec = {"runtime": {"namespace": "kubeflow-user-example-com"}}
+
+    start = collector.start(target=target, spec=spec)
+
+    assert start["start_joules"] == 5.5
+    assert target["predictor_pod_name"] == "bench-svc-predictor-live"
+    assert any('pod_name="stale-pod"' in query for query in queries)
+    assert any('pod_name=~"bench-svc-predictor-.*"' in query for query in queries)
+
+
 def test_execute_benchmark_persists_results(monkeypatch, tmp_path: Path):
     spec = {
         "metadata": {"name": "bench"},

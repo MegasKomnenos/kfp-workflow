@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from kfp_workflow.utils import load_yaml
 
@@ -14,14 +14,20 @@ from kfp_workflow.utils import load_yaml
 # Shared sub-specs
 # ---------------------------------------------------------------------------
 
-class MetadataSpec(BaseModel):
+class SpecModel(BaseModel):
+    """Shared Pydantic settings for user-authored workflow specs."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
+class MetadataSpec(SpecModel):
     """Name, description, and version tag for any spec."""
     name: str
     description: str = ""
     version: str = "v1"
 
 
-class ResourceSpec(BaseModel):
+class ResourceSpec(SpecModel):
     """Kubernetes resource requests and limits."""
     cpu_request: str = "4"
     cpu_limit: str = "4"
@@ -31,7 +37,7 @@ class ResourceSpec(BaseModel):
     gpu_limit: str = "1"
 
 
-class RuntimeSpec(BaseModel):
+class RuntimeSpec(SpecModel):
     """Execution environment for pipeline components."""
     namespace: str = "kubeflow-user-example-com"
     pipeline_root: str = ""
@@ -46,7 +52,7 @@ class RuntimeSpec(BaseModel):
     resources: ResourceSpec = Field(default_factory=ResourceSpec)
 
 
-class StorageSpec(BaseModel):
+class StorageSpec(SpecModel):
     """PVC-based storage configuration for data and model weights."""
     data_pvc: str = "dataset-store"
     model_pvc: str = "model-store"
@@ -72,21 +78,21 @@ class BenchmarkStorageSpec(StorageSpec):
 # Training pipeline spec
 # ---------------------------------------------------------------------------
 
-class DatasetRef(BaseModel):
+class DatasetRef(SpecModel):
     """Reference to a registered dataset."""
     name: str
     version: str = "v1"
     config: Dict[str, Any] = Field(default_factory=dict)
 
 
-class ModelRef(BaseModel):
+class ModelRef(SpecModel):
     """Reference to a model architecture and its plugin-specific config."""
     name: str
     version: str = "v1"
     config: Dict[str, Any] = Field(default_factory=dict)
 
 
-class TrainSpec(BaseModel):
+class TrainSpec(SpecModel):
     """Training hyper-parameters."""
     seed: int = 42
     batch_size: int = 64
@@ -99,7 +105,7 @@ class TrainSpec(BaseModel):
     score_weight: float = 0.01
 
 
-class PipelineSpec(BaseModel):
+class PipelineSpec(SpecModel):
     """Top-level spec for a training pipeline run."""
     metadata: MetadataSpec
     runtime: RuntimeSpec
@@ -116,7 +122,7 @@ class PipelineSpec(BaseModel):
 SearchParamType = Literal["categorical", "int", "float", "log_float"]
 
 
-class SearchParamSpec(BaseModel):
+class SearchParamSpec(SpecModel):
     """A single hyperparameter search dimension."""
 
     name: str
@@ -137,7 +143,7 @@ class SearchParamSpec(BaseModel):
         return self
 
 
-class HpoSpec(BaseModel):
+class HpoSpec(SpecModel):
     """Hyperparameter optimisation configuration."""
 
     algorithm: Literal["random", "tpe", "grid"] = "tpe"
@@ -148,7 +154,7 @@ class HpoSpec(BaseModel):
     search_space: List[SearchParamSpec] = Field(default_factory=list)
 
 
-class TuneSpec(BaseModel):
+class TuneSpec(SpecModel):
     """Top-level spec for a hyperparameter tuning run."""
 
     metadata: MetadataSpec
@@ -160,7 +166,7 @@ class TuneSpec(BaseModel):
     hpo: HpoSpec = Field(default_factory=HpoSpec)
 
 
-class HpoTrialResult(BaseModel):
+class HpoTrialResult(SpecModel):
     """Result of a single HPO trial."""
 
     trial_number: int
@@ -170,7 +176,7 @@ class HpoTrialResult(BaseModel):
     user_attrs: Dict[str, Any] = Field(default_factory=dict)
 
 
-class HpoResult(BaseModel):
+class HpoResult(SpecModel):
     """Aggregated result of an HPO run."""
 
     best_params: Dict[str, Any]
@@ -187,7 +193,7 @@ class HpoResult(BaseModel):
 # Serving spec
 # ---------------------------------------------------------------------------
 
-class ServingSpec(BaseModel):
+class ServingSpec(SpecModel):
     """Spec for creating a KServe InferenceService."""
     metadata: MetadataSpec
     namespace: str = "kubeflow-user-example-com"
@@ -235,7 +241,7 @@ class ServingSpec(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class BenchmarkModelSpec(BaseModel):
+class BenchmarkModelSpec(SpecModel):
     """Model deployment configuration for a benchmark run."""
 
     model_name: str
@@ -251,7 +257,7 @@ class BenchmarkModelSpec(BaseModel):
     resources: ResourceSpec = Field(default_factory=ResourceSpec)
 
 
-class BenchmarkSpec(BaseModel):
+class BenchmarkSpec(SpecModel):
     """Top-level spec for a benchmark workflow run."""
 
     metadata: MetadataSpec

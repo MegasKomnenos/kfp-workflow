@@ -222,7 +222,11 @@ class KeplerEnergyMetricCollector(MetricCollector):
         target: Dict[str, Any],
         spec: Dict[str, Any],
     ) -> Dict[str, Any]:
-        value = self._query_scalar(target=target, spec=spec)
+        value = self._query_scalar(
+            target=target,
+            spec=spec,
+            wait_seconds=float(self._config.get("series_wait_seconds", 30.0)),
+        )
         return {
             "start_joules": value,
             "start_time": time.time(),
@@ -257,7 +261,13 @@ class KeplerEnergyMetricCollector(MetricCollector):
             "request_count": int(scenario_result.get("request_count", 0)),
         }
 
-    def _query_scalar(self, *, target: Dict[str, Any], spec: Dict[str, Any]) -> float:
+    def _query_scalar(
+        self,
+        *,
+        target: Dict[str, Any],
+        spec: Dict[str, Any],
+        wait_seconds: float = 0.0,
+    ) -> float:
         prometheus_url = self._config.get(
             "prometheus_url",
             "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090",
@@ -266,24 +276,82 @@ class KeplerEnergyMetricCollector(MetricCollector):
         mode = self._config.get("mode", "dynamic")
         container_name = self._config.get("container_name", "kserve-container")
         namespace = spec["runtime"]["namespace"]
-        pod_name = target["predictor_pod_name"]
+        poll_interval = max(float(self._config.get("poll_interval_seconds", 1.0)), 0.1)
+        deadline = time.time() + max(wait_seconds, 0.0)
 
-        query = (
-            f'{metric_name}{{container_namespace="{namespace}",'
-            f'pod_name="{pod_name}",container_name="{container_name}",mode="{mode}"}}'
-        )
+        while True:
+            result = self._query_result_series(
+                prometheus_url=prometheus_url,
+                metric_name=metric_name,
+                namespace=namespace,
+                container_name=container_name,
+                mode=mode,
+                target=target,
+            )
+            if len(result) == 1:
+                metric = result[0].get("metric", {})
+                target["predictor_pod_name"] = metric.get(
+                    "pod_name",
+                    target.get("predictor_pod_name"),
+                )
+                return float(result[0]["value"][1])
+            if len(result) > 1 or time.time() >= deadline:
+                raise RuntimeError(
+                    f"Expected 1 Prometheus series for benchmark energy query, got {len(result)}."
+                )
+            time.sleep(poll_interval)
+
+    def _query_result_series(
+        self,
+        *,
+        prometheus_url: str,
+        metric_name: str,
+        namespace: str,
+        container_name: str,
+        mode: str,
+        target: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        query_timeout = int(self._config.get("query_timeout", 10))
+        pod_name = target.get("predictor_pod_name")
+        if pod_name:
+            exact = self._run_query(
+                prometheus_url=prometheus_url,
+                query=(
+                    f'{metric_name}{{container_namespace="{namespace}",'
+                    f'pod_name="{pod_name}",container_name="{container_name}",mode="{mode}"}}'
+                ),
+                query_timeout=query_timeout,
+            )
+            if exact:
+                return exact
+
+        service_name = target.get("service_name")
+        if service_name:
+            return self._run_query(
+                prometheus_url=prometheus_url,
+                query=(
+                    f'{metric_name}{{container_namespace="{namespace}",'
+                    f'pod_name=~"{service_name}-predictor-.*",'
+                    f'container_name="{container_name}",mode="{mode}"}}'
+                ),
+                query_timeout=query_timeout,
+            )
+        return []
+
+    def _run_query(
+        self,
+        *,
+        prometheus_url: str,
+        query: str,
+        query_timeout: int,
+    ) -> List[Dict[str, Any]]:
         response = requests.get(
             f"{prometheus_url}/api/v1/query",
             params={"query": query},
-            timeout=int(self._config.get("query_timeout", 10)),
+            timeout=query_timeout,
         )
         response.raise_for_status()
-        result = response.json()["data"]["result"]
-        if len(result) != 1:
-            raise RuntimeError(
-                f"Expected 1 Prometheus series for benchmark energy query, got {len(result)}."
-            )
-        return float(result[0]["value"][1])
+        return response.json()["data"]["result"]
 
 
 def resolve_scenario_definition(node: Dict[str, Any], spec: Dict[str, Any]) -> ScenarioDefinition:
@@ -344,6 +412,7 @@ def execute_benchmark(
     target: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Execute a fully materialized benchmark and persist results."""
+    target = _refresh_target(dict(target), spec)
     scenario = resolve_scenario_definition(spec["scenario"], spec)
     collectors = resolve_metric_collectors(spec.get("metrics", []), spec)
 
@@ -404,6 +473,22 @@ def _build_run_dir(spec: Dict[str, Any]) -> Path:
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     run_name = f"{stamp}-{socket.gethostname()}"
     return root / spec["metadata"]["name"] / run_name
+
+
+def _refresh_target(target: Dict[str, Any], spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Refresh the predictor pod name so metrics follow the live replica."""
+    service_name = target.get("service_name")
+    namespace = target.get("namespace") or spec["runtime"]["namespace"]
+    if not service_name:
+        return target
+
+    try:
+        from kfp_workflow.serving import kserve
+
+        target["predictor_pod_name"] = kserve.get_predictor_pod_name(service_name, namespace)
+    except Exception:
+        pass
+    return target
 
 
 def _ensure_model_package_on_path(package_dir_name: str) -> None:

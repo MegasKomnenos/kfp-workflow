@@ -27,6 +27,21 @@ def test_compile_benchmark_produces_yaml(tmp_path):
     content = result.read_text(encoding="utf-8")
     assert "pipelineSpec" in content or "PIPELINE" in content.upper()
     assert spec.metadata.name in content
+    assert "sidecar.istio.io/inject" in content
+    assert "true" in content
+    assert "cachingOptions: {}" in content
+    assert "enableCache: true" not in content
+
+
+def test_smoke_benchmark_refs_materialize():
+    spec, materialized = load_materialized_benchmark_spec(
+        CONFIGS / "benchmarks" / "mambasl_cmapss_kepler_smoke.yaml"
+    )
+    assert spec.metadata.name == "mambasl-cmapss-benchmark-smoke"
+    assert materialized["scenario"]["dataset"]["kind"] == "cmapss-timeseries"
+    assert materialized["scenario"]["dataset"]["config"]["unit_ids"] == [1, 2, 3]
+    assert materialized["metrics"][0]["kind"] == "kepler-energy"
+    assert materialized["metrics"][0]["config"]["settle_seconds"] == 20
 
 
 def test_python_benchmark_spec_loads(tmp_path):

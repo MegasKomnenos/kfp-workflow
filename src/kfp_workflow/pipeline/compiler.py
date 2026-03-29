@@ -7,7 +7,7 @@ from pathlib import Path
 
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
-from kfp import compiler, dsl
+from kfp import compiler, dsl, kubernetes
 
 from kfp_workflow.components import (
     evaluate_component,
@@ -29,23 +29,8 @@ def _set_image_pull_policy(task: dsl.PipelineTask, policy: str) -> dsl.PipelineT
 
 
 def _mount_pvc(task: dsl.PipelineTask, pvc_name: str, mount_path: str) -> dsl.PipelineTask:
-    """Mount a PVC without relying on protobuf JSON helpers."""
-    kube_config = dict(task.platform_config.get("kubernetes", {}))
-    mounts = list(kube_config.get("pvcMount", []))
-    mounts.append({
-        "constant": pvc_name,
-        "mountPath": mount_path,
-        "pvcNameParameter": {
-            "runtimeValue": {
-                "constant": {
-                    "stringValue": pvc_name,
-                }
-            }
-        },
-    })
-    kube_config["pvcMount"] = mounts
-    task.platform_config["kubernetes"] = kube_config
-    return task
+    """Mount a PVC using the supported KFP Kubernetes helper."""
+    return kubernetes.mount_pvc(task, pvc_name=pvc_name, mount_path=mount_path)
 
 
 def _configure_task(task: dsl.PipelineTask, spec: PipelineSpec) -> dsl.PipelineTask:

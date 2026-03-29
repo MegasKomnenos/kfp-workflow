@@ -8,7 +8,7 @@ from pathlib import Path
 
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
-from kfp import compiler, dsl
+from kfp import compiler, dsl, kubernetes
 
 from kfp_workflow.benchmark.components import (
     cleanup_benchmark_model_component,
@@ -28,24 +28,21 @@ def _set_image_pull_policy(task: dsl.PipelineTask, policy: str) -> dsl.PipelineT
 
 
 def _mount_pvc(task: dsl.PipelineTask, pvc_name: str, mount_path: str) -> dsl.PipelineTask:
-    kube_config = dict(task.platform_config.get("kubernetes", {}))
-    mounts = list(kube_config.get("pvcMount", []))
-    mounts.append(
-        {
-            "constant": pvc_name,
-            "mountPath": mount_path,
-            "pvcNameParameter": {
-                "runtimeValue": {
-                    "constant": {
-                        "stringValue": pvc_name,
-                    }
-                }
-            },
-        }
+    """Mount a PVC using the supported KFP Kubernetes helper."""
+    return kubernetes.mount_pvc(task, pvc_name=pvc_name, mount_path=mount_path)
+
+
+def _set_pod_annotation(
+    task: dsl.PipelineTask,
+    key: str,
+    value: str,
+) -> dsl.PipelineTask:
+    """Apply a Pod annotation using the supported KFP Kubernetes helper."""
+    return kubernetes.add_pod_annotation(
+        task,
+        annotation_key=key,
+        annotation_value=value,
     )
-    kube_config["pvcMount"] = mounts
-    task.platform_config["kubernetes"] = kube_config
-    return task
 
 
 def _configure_task(task: dsl.PipelineTask, spec: BenchmarkSpec) -> dsl.PipelineTask:
@@ -62,6 +59,7 @@ def _configure_task(task: dsl.PipelineTask, spec: BenchmarkSpec) -> dsl.Pipeline
     _mount_pvc(task, pvc_name=spec.storage.data_pvc, mount_path=spec.storage.data_mount_path)
     _mount_pvc(task, pvc_name=spec.storage.model_pvc, mount_path=spec.storage.model_mount_path)
     _mount_pvc(task, pvc_name=spec.storage.results_pvc, mount_path=spec.storage.results_mount_path)
+    task.set_caching_options(False)
     return _set_image_pull_policy(task, spec.runtime.image_pull_policy)
 
 
@@ -88,6 +86,7 @@ def build_benchmark_pipeline(spec: BenchmarkSpec, materialized_spec: dict):
             )
             run_task.after(wait_task)
             _configure_task(run_task, spec)
+            _set_pod_annotation(run_task, "sidecar.istio.io/inject", "true")
 
     return benchmark_pipeline
 

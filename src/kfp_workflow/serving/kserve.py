@@ -339,7 +339,7 @@ def wait_for_inference_service_ready(
             continue
         if latest["ready"] == "True":
             return latest
-            time.sleep(poll_interval)
+        time.sleep(poll_interval)
     return latest
 
 

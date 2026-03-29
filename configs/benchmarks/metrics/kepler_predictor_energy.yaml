@@ -1,0 +1,8 @@
+kind: kepler-energy
+config:
+  prometheus_url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+  metric_name: kepler_container_joules_total
+  container_name: kserve-container
+  mode: dynamic
+  settle_seconds: 20
+  poll_interval_seconds: 1
