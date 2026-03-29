@@ -339,12 +339,14 @@ kfp-workflow benchmark submit \
 ### 4. Wait for completion and verify result persistence
 ```bash
 kfp-workflow pipeline run wait <run_id>
+kfp-workflow benchmark get <run_id>
+kfp-workflow benchmark download <run_id>
 
 # Example validated on 2026-03-29:
 # run_id: ba893c5b-14bb-4fde-8229-a040127ee36e
 # workflow: mambasl-cmapss-benchmark-smoke-2nx2f
 # results file:
-# /opt/local-path-provisioner/pvc-bffb4b4d-0996-423e-b3b3-d0c80f041d5b_kubeflow-user-example-com_benchmark-store/mambasl-cmapss-benchmark-smoke/20260329T103020-mambasl-cmapss-benchmark-smoke-2nx2f-metadata-1-0-system-contai/results.json
+# /opt/local-path-provisioner/pvc-bffb4b4d-0996-423e-b3b3-d0c80f041d5b_kubeflow-user-example-com_benchmark-store/benchmark-results/mambasl-cmapss-benchmark-smoke/20260329T103020-mambasl-cmapss-benchmark-smoke-2nx2f-metadata-1-0-system-contai/results.json
 ```
 
 Expected smoke result:

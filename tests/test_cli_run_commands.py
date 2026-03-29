@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -207,6 +208,95 @@ def test_experiment_list(mock_conn):
     result = runner.invoke(app, ["pipeline", "experiment", "list"])
     assert result.exit_code == 0
     assert "test-experiment" in result.output
+
+
+# ---------------------------------------------------------------------------
+# benchmark list / get / download
+# ---------------------------------------------------------------------------
+
+@patch("kfp_workflow.benchmark.history.extract_benchmark_spec")
+@patch("kfp_workflow.benchmark.history.is_benchmark_workflow")
+@patch("kfp_workflow.benchmark.history.find_workflow_for_run")
+@patch("kfp_workflow.pipeline.connection.kfp_connection")
+def test_benchmark_list(mock_conn, mock_find, mock_is_benchmark, mock_extract):
+    mock_client = MagicMock()
+    response = MagicMock()
+    response.runs = [_mock_run(display_name="ignored"), _mock_run(run_id="bench-123", display_name="bench-run")]
+    mock_client.list_runs.return_value = response
+    mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+
+    workflow = {"metadata": {"name": "workflow-123"}, "status": {"phase": "Succeeded"}}
+    mock_find.side_effect = [None, workflow]
+    mock_is_benchmark.side_effect = [True]
+    mock_extract.return_value = {"metadata": {"name": "mambasl-cmapss-benchmark-smoke"}}
+
+    result = runner.invoke(app, ["--json", "benchmark", "list"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload[0]["benchmark_name"] == "mambasl-cmapss-benchmark-smoke"
+    assert payload[0]["run_id"] == "bench-123"
+
+
+@patch("kfp_workflow.benchmark.history.resolve_results")
+@patch("kfp_workflow.benchmark.history.extract_benchmark_spec")
+@patch("kfp_workflow.benchmark.history.is_benchmark_workflow")
+@patch("kfp_workflow.benchmark.history.find_workflow_for_run")
+@patch("kfp_workflow.pipeline.connection.kfp_connection")
+def test_benchmark_get(mock_conn, mock_find, mock_is_benchmark, mock_extract, mock_resolve):
+    mock_client = MagicMock()
+    mock_client.get_run.return_value = _mock_run(run_id="bench-123", display_name="bench-run")
+    mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+
+    workflow = {
+        "metadata": {"name": "workflow-123"},
+        "status": {"phase": "Succeeded", "progress": "4/4"},
+    }
+    mock_find.return_value = workflow
+    mock_is_benchmark.return_value = True
+    mock_extract.return_value = {"metadata": {"name": "mambasl-cmapss-benchmark-smoke"}}
+    mock_resolve.return_value = {
+        "results_path": "/mnt/results/bench/results.json",
+        "summary": {"status": "succeeded", "request_count": 5, "delta_joules": 2.5},
+        "payload": {"status": "succeeded"},
+    }
+
+    result = runner.invoke(app, ["benchmark", "get", "bench-123"])
+    assert result.exit_code == 0
+    assert "mambasl-cmapss-benchmark-smoke" in result.output
+    assert "/mnt/results/bench/results.json" in result.output
+    assert "2.5" in result.output
+
+
+@patch("kfp_workflow.benchmark.history.resolve_results")
+@patch("kfp_workflow.benchmark.history.extract_benchmark_spec")
+@patch("kfp_workflow.benchmark.history.is_benchmark_workflow")
+@patch("kfp_workflow.benchmark.history.find_workflow_for_run")
+@patch("kfp_workflow.pipeline.connection.kfp_connection")
+def test_benchmark_download(mock_conn, mock_find, mock_is_benchmark, mock_extract, mock_resolve, tmp_path: Path):
+    mock_client = MagicMock()
+    mock_client.get_run.return_value = _mock_run(run_id="bench-123", display_name="bench-run")
+    mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+
+    workflow = {"metadata": {"name": "workflow-123"}, "status": {"phase": "Succeeded"}}
+    mock_find.return_value = workflow
+    mock_is_benchmark.return_value = True
+    mock_extract.return_value = {"metadata": {"name": "mambasl-cmapss-benchmark-smoke"}}
+    mock_resolve.return_value = {
+        "results_path": "/mnt/results/bench/results.json",
+        "summary": {"status": "succeeded", "request_count": 5},
+        "payload": {"status": "succeeded", "scenario": {"request_count": 5}},
+    }
+
+    output = tmp_path / "downloaded.json"
+    result = runner.invoke(app, ["benchmark", "download", "bench-123", "--output", str(output)])
+    assert result.exit_code == 0
+    assert output.exists()
+    saved = json.loads(output.read_text("utf-8"))
+    assert saved["status"] == "succeeded"
+    assert "downloaded" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------

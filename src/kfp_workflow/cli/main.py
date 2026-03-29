@@ -273,6 +273,230 @@ def cmd_benchmark_submit(
     typer.echo(f"Benchmark submitted. Run ID: {run_id}")
 
 
+@benchmark_app.command("list")
+def cmd_benchmark_list(
+    namespace: str = typer.Option(
+        "kubeflow-user-example-com", help="Kubernetes namespace.",
+    ),
+    page_size: int = typer.Option(20, help="Number of runs to return."),
+    sort_by: str = typer.Option(
+        "created_at desc", help="Sort order (e.g. 'created_at desc').",
+    ),
+    host: str = typer.Option(
+        "http://127.0.0.1:8888", help="KFP API host.",
+    ),
+    user: str = typer.Option(
+        "user@example.com", help="Kubeflow user identity header.",
+    ),
+    existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
+    cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
+) -> None:
+    """List past benchmark runs."""
+    from kfp_workflow.benchmark.history import (
+        extract_benchmark_spec,
+        find_workflow_for_run,
+        is_benchmark_workflow,
+    )
+    from kfp_workflow.cli.output import print_json, print_table, style_run_state
+    from kfp_workflow.pipeline.connection import kfp_connection
+
+    with kfp_connection(
+        namespace=namespace, host=host, user=user,
+        existing_token=existing_token, cookies=cookies,
+    ) as client:
+        response = client.list_runs(
+            page_size=page_size,
+            sort_by=sort_by,
+            namespace=namespace,
+        )
+
+    runs = response.runs or []
+    items: List[Dict[str, Any]] = []
+    for run in runs:
+        workflow = find_workflow_for_run(run.run_id, namespace)
+        if not workflow or not is_benchmark_workflow(workflow):
+            continue
+        benchmark_spec = extract_benchmark_spec(workflow) or {}
+        workflow_summary = _workflow_summary(workflow) or {}
+        items.append({
+            "run_id": run.run_id,
+            "display_name": run.display_name,
+            "benchmark_name": benchmark_spec.get("metadata", {}).get("name", run.display_name),
+            "state": _run_state_str(run.state),
+            "created_at": str(run.created_at),
+            "finished_at": str(run.finished_at),
+            "workflow_name": workflow_summary.get("name", ""),
+            "workflow_phase": workflow_summary.get("phase", ""),
+        })
+
+    if _json_output:
+        print_json(items)
+        return
+
+    rows = []
+    for item in items:
+        rows.append((
+            (item["run_id"] or "")[:8],
+            item["benchmark_name"] or "",
+            style_run_state(item["state"]),
+            item["workflow_name"] or "",
+            item["created_at"] or "",
+            item["finished_at"] or "",
+        ))
+    print_table(
+        title="Benchmark Runs",
+        columns=["ID", "BENCHMARK", "STATE", "WORKFLOW", "CREATED", "FINISHED"],
+        rows=rows,
+    )
+
+
+@benchmark_app.command("get")
+def cmd_benchmark_get(
+    run_id: str = typer.Argument(..., help="Benchmark run ID."),
+    namespace: str = typer.Option(
+        "kubeflow-user-example-com", help="Kubernetes namespace.",
+    ),
+    host: str = typer.Option(
+        "http://127.0.0.1:8888", help="KFP API host.",
+    ),
+    user: str = typer.Option(
+        "user@example.com", help="Kubeflow user identity header.",
+    ),
+    existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
+    cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
+) -> None:
+    """Show detailed info for a benchmark run."""
+    from kfp_workflow.benchmark.history import (
+        extract_benchmark_spec,
+        find_workflow_for_run,
+        is_benchmark_workflow,
+        resolve_results,
+    )
+    from kfp_workflow.cli.output import print_json, print_kv, style_run_state
+    from kfp_workflow.pipeline.connection import kfp_connection
+
+    with kfp_connection(
+        namespace=namespace, host=host, user=user,
+        existing_token=existing_token, cookies=cookies,
+    ) as client:
+        run = client.get_run(run_id=run_id)
+
+    workflow = find_workflow_for_run(run_id, namespace)
+    if not workflow or not is_benchmark_workflow(workflow):
+        typer.echo(f"Run '{run_id}' is not a benchmark workflow.", err=True)
+        raise typer.Exit(code=1)
+
+    benchmark_spec = extract_benchmark_spec(workflow) or {}
+    payload = _augment_run_payload(run, workflow)
+    payload["benchmark_name"] = benchmark_spec.get("metadata", {}).get("name", run.display_name)
+
+    try:
+        results = resolve_results(
+            workflow=workflow,
+            benchmark_spec=benchmark_spec,
+            namespace=namespace,
+        )
+        payload["results_path"] = results["results_path"]
+        payload["results_summary"] = results["summary"]
+    except Exception as exc:
+        payload["results_error"] = str(exc)
+
+    if _json_output:
+        print_json(payload)
+        return
+
+    pairs = [
+        ("Benchmark", payload["benchmark_name"] or ""),
+        ("Run ID", run.run_id or ""),
+        ("Name", run.display_name or ""),
+        ("State", style_run_state(_run_state_str(run.state))),
+        ("Created", str(run.created_at or "")),
+        ("Finished", str(run.finished_at or "")),
+        ("Experiment ID", run.experiment_id or ""),
+    ]
+    workflow_summary = _workflow_summary(workflow)
+    if workflow_summary:
+        pairs.extend([
+            ("Workflow", workflow_summary["name"]),
+            ("Workflow Phase", workflow_summary["phase"] or "(unknown)"),
+            ("Workflow Progress", workflow_summary["progress"] or "(unknown)"),
+        ])
+    if "results_path" in payload:
+        pairs.append(("Results Path", payload["results_path"]))
+    if "results_summary" in payload:
+        summary = payload["results_summary"]
+        pairs.append(("Result Status", str(summary.get("status", ""))))
+        pairs.append(("Request Count", str(summary.get("request_count", ""))))
+        if "delta_joules" in summary:
+            pairs.append(("Delta Joules", str(summary["delta_joules"])))
+    if "results_error" in payload:
+        pairs.append(("Results Error", payload["results_error"]))
+    print_kv(pairs)
+
+
+@benchmark_app.command("download")
+def cmd_benchmark_download(
+    run_id: str = typer.Argument(..., help="Benchmark run ID."),
+    output: Optional[Path] = typer.Option(None, help="Write results JSON to this path."),
+    namespace: str = typer.Option(
+        "kubeflow-user-example-com", help="Kubernetes namespace.",
+    ),
+    host: str = typer.Option(
+        "http://127.0.0.1:8888", help="KFP API host.",
+    ),
+    user: str = typer.Option(
+        "user@example.com", help="Kubeflow user identity header.",
+    ),
+    existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
+    cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
+) -> None:
+    """Download a benchmark run's results.json to the local machine."""
+    from kfp_workflow.benchmark.history import (
+        extract_benchmark_spec,
+        find_workflow_for_run,
+        is_benchmark_workflow,
+        resolve_results,
+    )
+    from kfp_workflow.cli.output import print_json
+    from kfp_workflow.pipeline.connection import kfp_connection
+    from kfp_workflow.utils import dump_json, ensure_parent
+
+    with kfp_connection(
+        namespace=namespace, host=host, user=user,
+        existing_token=existing_token, cookies=cookies,
+    ) as client:
+        run = client.get_run(run_id=run_id)
+
+    workflow = find_workflow_for_run(run_id, namespace)
+    if not workflow or not is_benchmark_workflow(workflow):
+        typer.echo(f"Run '{run_id}' is not a benchmark workflow.", err=True)
+        raise typer.Exit(code=1)
+
+    benchmark_spec = extract_benchmark_spec(workflow) or {}
+    benchmark_name = benchmark_spec.get("metadata", {}).get("name", run.display_name or "benchmark")
+    results = resolve_results(
+        workflow=workflow,
+        benchmark_spec=benchmark_spec,
+        namespace=namespace,
+    )
+
+    destination = output or Path.cwd() / f"{benchmark_name}-{run_id}.json"
+    ensure_parent(destination)
+    dump_json(results["payload"], destination)
+
+    payload = {
+        "run_id": run_id,
+        "benchmark_name": benchmark_name,
+        "results_path": results["results_path"],
+        "output_path": str(destination),
+    }
+    if _json_output:
+        print_json(payload)
+        return
+
+    typer.echo(f"Benchmark results downloaded to {destination}")
+
+
 # ---------------------------------------------------------------------------
 # pipeline commands
 # ---------------------------------------------------------------------------

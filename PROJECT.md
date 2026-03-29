@@ -101,6 +101,7 @@ test/
 │   │   ├── client.py                  # Benchmark compilation + submission
 │   │   ├── compiler.py                # Benchmark DAG assembly + KFP compilation
 │   │   ├── components.py              # Deploy / wait / run / cleanup benchmark KFP components
+│   │   ├── history.py                 # Benchmark run discovery, PVC result lookup, and download helpers
 │   │   ├── interfaces.py              # Standard dataset, scenario, and metric interfaces
 │   │   ├── materialize.py             # YAML/Python ref loading and benchmark spec materialization
 │   │   └── runtime.py                 # Built-in C-MAPSS replay and Kepler metric collection
@@ -136,6 +137,7 @@ test/
 │       └── predictor.py               # Custom KServe predictor (plugin dispatch)
 │
 └── tests/
+    ├── test_benchmark_history.py      # Benchmark workflow classification and PVC result lookup tests
     ├── test_benchmark_compile.py      # Benchmark materialization and compile tests
     ├── test_benchmark_runtime.py      # Benchmark dataset, replay, metric, and result persistence tests
     ├── test_specs.py                  # Spec loading and validation

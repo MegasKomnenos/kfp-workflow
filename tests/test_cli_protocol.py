@@ -36,6 +36,24 @@ def test_benchmark_submit_help():
     assert "--spec" in result.output
 
 
+def test_benchmark_list_help():
+    result = runner.invoke(app, ["benchmark", "list", "--help"])
+    assert result.exit_code == 0
+    assert "--namespace" in result.output
+
+
+def test_benchmark_get_help():
+    result = runner.invoke(app, ["benchmark", "get", "--help"])
+    assert result.exit_code == 0
+    assert "run-id" in result.output.lower() or "RUN_ID" in result.output
+
+
+def test_benchmark_download_help():
+    result = runner.invoke(app, ["benchmark", "download", "--help"])
+    assert result.exit_code == 0
+    assert "--output" in result.output
+
+
 def test_serve_create_help():
     result = runner.invoke(app, ["serve", "create", "--help"])
     assert result.exit_code == 0

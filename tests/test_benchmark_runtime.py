@@ -329,6 +329,7 @@ def metric_factory():
 
     results_path = Path(result["results_path"])
     assert results_path.exists()
+    assert results_path.parent.parts[-3] == "benchmark-results"
     saved = json.loads(results_path.read_text("utf-8"))
     assert saved["status"] == "succeeded"
     assert saved["scenario"]["request_count"] == 1

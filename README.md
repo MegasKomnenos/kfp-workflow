@@ -55,6 +55,9 @@ kfp-workflow pipeline submit    --spec <path> [--namespace] [--host] [--user] [-
 # Benchmark lifecycle
 kfp-workflow benchmark compile  --spec <path> --output <path> [--set key=value ...]
 kfp-workflow benchmark submit   --spec <path> [--namespace] [--host] [--user] [--existing-token] [--cookies] [--set key=value ...]
+kfp-workflow benchmark list                 [--namespace] [--page-size] [--sort-by] [--host] [--user]
+kfp-workflow benchmark get      <run_id>   [--namespace] [--host] [--user]
+kfp-workflow benchmark download <run_id>   [--output <path>] [--namespace] [--host] [--user]
 
 # Pipeline run monitoring
 kfp-workflow pipeline run get       <run_id>   [--namespace] [--host] [--user]
@@ -135,7 +138,7 @@ Built-in benchmark pieces included in this repo:
 - `sequential-replay` — Sends one section at a time to the benchmark `InferenceService`
 - `kepler-energy` — Reads `kepler_container_joules_total` from Prometheus/Kepler for the predictor container
 
-The shipped smoke benchmark is `configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml`. It deploys `mambasl-cmapss`, replays 5 FD001 windows at 1 Hz, and writes `results.json` to the benchmark PVC.
+The shipped smoke benchmark is `configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml`. It deploys `mambasl-cmapss`, replays 5 FD001 windows at 1 Hz, and writes `results.json` under `benchmark-results/` on the benchmark PVC.
 
 ```bash
 kfp-workflow cluster bootstrap \
@@ -148,6 +151,10 @@ kfp-workflow benchmark compile \
 
 kfp-workflow benchmark submit \
   --spec configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml
+
+kfp-workflow benchmark list
+kfp-workflow benchmark get <run_id>
+kfp-workflow benchmark download <run_id>
 ```
 
 ### CLI Config Overrides (`--set`)

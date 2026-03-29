@@ -417,9 +417,9 @@ def execute_benchmark(
     scenario = resolve_scenario_definition(spec["scenario"], spec)
     collectors = resolve_metric_collectors(spec.get("metrics", []), spec)
 
-    run_dir = _build_run_dir(spec)
-    run_dir.mkdir(parents=True, exist_ok=True)
-    results_path = run_dir / "results.json"
+    pvc_run_dir = _build_run_dir(spec)
+    pvc_run_dir.mkdir(parents=True, exist_ok=True)
+    results_path = pvc_run_dir / "results.json"
 
     metric_states: Dict[str, Dict[str, Any]] = {}
     scenario_result: Dict[str, Any] = {}
@@ -432,7 +432,7 @@ def execute_benchmark(
         scenario_result = scenario.pipeline().run(
             scenario.dataset(),
             target=target,
-            results_dir=str(run_dir),
+            results_dir=str(pvc_run_dir),
             spec=spec,
         )
     except Exception as exc:
@@ -470,10 +470,11 @@ def execute_benchmark(
 
 
 def _build_run_dir(spec: Dict[str, Any]) -> Path:
-    root = Path(spec["storage"]["results_mount_path"])
+    root = Path(spec["storage"]["results_mount_path"]) / "benchmark-results"
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     run_name = f"{stamp}-{socket.gethostname()}"
-    return root / spec["metadata"]["name"] / run_name
+    benchmark_name = spec["metadata"]["name"]
+    return root / benchmark_name / run_name
 
 
 def _refresh_target(target: Dict[str, Any], spec: Dict[str, Any]) -> Dict[str, Any]:
