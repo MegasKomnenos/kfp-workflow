@@ -6,6 +6,7 @@ import inspect
 import itertools
 import json
 import socket
+import sys
 import tempfile
 import time
 import types
@@ -80,6 +81,7 @@ class CmapssTimeseriesDatasetSource(DatasetSource):
 
     def iter_sections(self) -> Iterable[Dict[str, Any]]:
         import numpy as np
+        _ensure_model_package_on_path("mambasl-new")
         from mambasl_new.cmapss.constants import FD_CONFIGS
         from mambasl_new.cmapss.data import load_fd
         from mambasl_new.cmapss.preprocess import get_feature_cols, preprocess_frames
@@ -402,3 +404,11 @@ def _build_run_dir(spec: Dict[str, Any]) -> Path:
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     run_name = f"{stamp}-{socket.gethostname()}"
     return root / spec["metadata"]["name"] / run_name
+
+
+def _ensure_model_package_on_path(package_dir_name: str) -> None:
+    """Add the local model package source tree during repository-local tests."""
+    repo_root = Path(__file__).resolve().parents[3]
+    candidate = repo_root / "models" / package_dir_name / "src"
+    if candidate.exists():
+        sys.path.insert(0, str(candidate))
