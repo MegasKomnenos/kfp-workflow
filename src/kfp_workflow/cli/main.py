@@ -141,6 +141,7 @@ app = typer.Typer(
 )
 
 pipeline_app = typer.Typer(help="Compile and submit training pipelines.")
+benchmark_app = typer.Typer(help="Compile and submit benchmark workflows.")
 run_app = typer.Typer(help="Monitor and manage pipeline runs.")
 experiment_app = typer.Typer(help="Manage pipeline experiments.")
 serve_app = typer.Typer(help="Create and manage KServe InferenceServices.")
@@ -152,6 +153,7 @@ spec_app = typer.Typer(help="Spec validation.")
 tune_app = typer.Typer(help="Hyperparameter tuning operations.")
 
 app.add_typer(pipeline_app, name="pipeline")
+app.add_typer(benchmark_app, name="benchmark")
 pipeline_app.add_typer(run_app, name="run")
 pipeline_app.add_typer(experiment_app, name="experiment")
 app.add_typer(serve_app, name="serve")
@@ -192,6 +194,9 @@ def cmd_spec_validate(
     ),
 ) -> None:
     """Load and validate a spec file."""
+    from kfp_workflow.benchmark.materialize import (
+        load_materialized_benchmark_spec,
+    )
     from kfp_workflow.specs import load_pipeline_spec_with_overrides, load_serving_spec
 
     if spec_type == "pipeline":
@@ -203,12 +208,69 @@ def cmd_spec_validate(
         from kfp_workflow.specs import load_tune_spec_with_overrides
         loaded = load_tune_spec_with_overrides(spec, set_values or None)
         _validate_plugin_config_or_exit(loaded.model_dump())
+    elif spec_type == "benchmark":
+        loaded, materialized = load_materialized_benchmark_spec(spec, set_values or None)
     else:
         typer.echo(f"Unknown spec type: {spec_type}", err=True)
         raise typer.Exit(code=1)
 
     typer.echo(f"Spec '{loaded.metadata.name}' validated successfully.")
-    typer.echo(json.dumps(loaded.model_dump(), indent=2, default=str))
+    payload = materialized if spec_type == "benchmark" else loaded.model_dump()
+    typer.echo(json.dumps(payload, indent=2, default=str))
+
+
+# ---------------------------------------------------------------------------
+# benchmark commands
+# ---------------------------------------------------------------------------
+
+
+@benchmark_app.command("compile")
+def cmd_benchmark_compile(
+    spec: Path = typer.Option(..., help="Path to a benchmark YAML spec."),
+    output: Path = typer.Option(..., help="Output path for compiled YAML."),
+    set_values: List[str] = typer.Option(
+        [], "--set",
+        help="Override spec values (e.g., --set scenario.pipeline.config.interval_hz=2).",
+    ),
+) -> None:
+    """Compile a benchmark workflow to a KFP v2 YAML package."""
+    from kfp_workflow.benchmark.compiler import compile_benchmark
+    from kfp_workflow.benchmark.materialize import load_materialized_benchmark_spec
+
+    loaded, materialized = load_materialized_benchmark_spec(spec, set_values or None)
+    result = compile_benchmark(loaded, materialized, output)
+    typer.echo(f"Benchmark compiled to {result}")
+
+
+@benchmark_app.command("submit")
+def cmd_benchmark_submit(
+    spec: Path = typer.Option(..., help="Path to a benchmark YAML spec."),
+    namespace: Optional[str] = typer.Option(None, help="Kubernetes namespace override."),
+    host: Optional[str] = typer.Option(None, help="KFP API host override."),
+    user: Optional[str] = typer.Option(None, help="Kubeflow user identity header."),
+    existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
+    cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
+    set_values: List[str] = typer.Option(
+        [], "--set",
+        help="Override spec values (e.g., --set model.service_name=bench-smoke).",
+    ),
+) -> None:
+    """Compile and submit a benchmark workflow to Kubeflow."""
+    from kfp_workflow.benchmark.client import submit_benchmark
+    from kfp_workflow.benchmark.materialize import load_materialized_benchmark_spec
+
+    loaded, _ = load_materialized_benchmark_spec(spec, set_values or None)
+    run_id = submit_benchmark(
+        loaded,
+        spec_path=spec,
+        overrides=set_values or None,
+        namespace=namespace,
+        host=host,
+        existing_token=existing_token,
+        cookies=cookies,
+        user=user,
+    )
+    typer.echo(f"Benchmark submitted. Run ID: {run_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -963,12 +1025,25 @@ def _run_kubectl(args: list[str], *, input_text: str | None = None) -> None:
 @cluster_app.command("bootstrap")
 def cmd_cluster_bootstrap(
     spec: Path = typer.Option(..., help="Path to a pipeline YAML spec."),
+    spec_type: str = typer.Option(
+        "pipeline",
+        "--type",
+        help="Spec type: 'pipeline' or 'benchmark'.",
+    ),
     dry_run: bool = typer.Option(False, help="Print manifests without applying."),
 ) -> None:
     """Create PVCs for data and model storage."""
+    from kfp_workflow.benchmark.materialize import load_materialized_benchmark_spec
     from kfp_workflow.specs import load_pipeline_spec
 
-    loaded = load_pipeline_spec(spec)
+    if spec_type == "pipeline":
+        loaded = load_pipeline_spec(spec)
+    elif spec_type == "benchmark":
+        loaded, _ = load_materialized_benchmark_spec(spec)
+    else:
+        typer.echo(f"Unknown spec type: {spec_type}", err=True)
+        raise typer.Exit(code=1)
+
     storage = loaded.storage
     namespace = loaded.runtime.namespace
 
@@ -1000,6 +1075,27 @@ def cmd_cluster_bootstrap(
     }
 
     manifests = [data_pvc, model_pvc]
+    results_pvc = getattr(storage, "results_pvc", None)
+    if results_pvc:
+        manifests.append(
+            {
+                "apiVersion": "v1",
+                "kind": "PersistentVolumeClaim",
+                "metadata": {
+                    "name": results_pvc,
+                    "namespace": namespace,
+                },
+                "spec": {
+                    "accessModes": ["ReadWriteOnce"],
+                    "storageClassName": storage.storage_class,
+                    "resources": {
+                        "requests": {
+                            "storage": getattr(storage, "results_size", storage.model_size),
+                        }
+                    },
+                },
+            }
+        )
     typer.echo(json.dumps(manifests, indent=2))
 
     if dry_run:

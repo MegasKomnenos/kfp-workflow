@@ -1,4 +1,4 @@
-"""Pydantic configuration models for training pipelines and inference serving."""
+"""Pydantic configuration models for training, serving, tuning, and benchmarks."""
 
 from __future__ import annotations
 
@@ -58,6 +58,14 @@ class StorageSpec(BaseModel):
     model_mount_path: str = "/mnt/models"
     seed_source_dir: str = ""
     skip_seed: bool = False
+
+
+class BenchmarkStorageSpec(StorageSpec):
+    """PVC-backed storage for benchmark inputs and results."""
+
+    results_pvc: str = "benchmark-store"
+    results_size: str = "8Gi"
+    results_mount_path: str = "/mnt/benchmarks"
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +231,50 @@ class ServingSpec(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Benchmark spec
+# ---------------------------------------------------------------------------
+
+
+class BenchmarkModelSpec(BaseModel):
+    """Model deployment configuration for a benchmark run."""
+
+    model_name: str
+    model_version: str = "v1"
+    model_pvc: str = "model-store"
+    model_subpath: str
+    runtime: str = "custom"
+    predictor_image: str = "kfp-workflow:latest"
+    service_name: str = ""
+    replicas: int = 1
+    cleanup: bool = True
+    wait_timeout: int = 300
+    resources: ResourceSpec = Field(default_factory=ResourceSpec)
+
+
+class BenchmarkSpec(BaseModel):
+    """Top-level spec for a benchmark workflow run."""
+
+    metadata: MetadataSpec
+    runtime: RuntimeSpec
+    storage: BenchmarkStorageSpec = Field(default_factory=BenchmarkStorageSpec)
+    model: BenchmarkModelSpec
+    scenario: Dict[str, Any]
+    metrics: List[Dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_contract(self) -> "BenchmarkSpec":
+        service_name = self.model.service_name or self.metadata.name
+        effective_name = f"{service_name}-predictor-{self.runtime.namespace}"
+        if len(effective_name) > 63:
+            raise ValueError(
+                "benchmark model service_name is too long for KServe RawDeployment. "
+                f"Effective host label '{effective_name}' has length {len(effective_name)} "
+                "but the limit is 63."
+            )
+        return self
+
+
+# ---------------------------------------------------------------------------
 # Loaders
 # ---------------------------------------------------------------------------
 
@@ -267,3 +319,22 @@ def load_tune_spec_with_overrides(
         from kfp_workflow.config_override import apply_overrides
         raw = apply_overrides(raw, overrides)
     return TuneSpec.model_validate(raw)
+
+
+def load_benchmark_spec(path: str | Path) -> BenchmarkSpec:
+    """Load and validate a benchmark spec from YAML or Python."""
+    raw = load_yaml(Path(path))
+    return BenchmarkSpec.model_validate(raw)
+
+
+def load_benchmark_spec_with_overrides(
+    path: str | Path,
+    overrides: list[str] | None = None,
+) -> BenchmarkSpec:
+    """Load a benchmark spec from YAML, apply CLI overrides, then validate."""
+    raw = load_yaml(Path(path))
+    if overrides:
+        from kfp_workflow.config_override import apply_overrides
+
+        raw = apply_overrides(raw, overrides)
+    return BenchmarkSpec.model_validate(raw)

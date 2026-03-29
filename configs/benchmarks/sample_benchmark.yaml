@@ -1,0 +1,68 @@
+metadata:
+  name: sample-benchmark
+  description: Sample benchmark spec
+  version: v1
+
+runtime:
+  namespace: kubeflow-user-example-com
+  pipeline_root: ""
+  image: kfp-workflow:latest
+  image_pull_policy: IfNotPresent
+  service_account: default-editor
+  host: "http://127.0.0.1:8888"
+  port_forward_namespace: kubeflow
+  port_forward_service: svc/ml-pipeline
+  use_gpu: false
+  torch_num_threads: 4
+  resources:
+    cpu_request: "2"
+    cpu_limit: "2"
+    memory_request: 4Gi
+    memory_limit: 4Gi
+    gpu_request: "0"
+    gpu_limit: "0"
+
+storage:
+  data_pvc: dataset-store
+  model_pvc: model-store
+  results_pvc: benchmark-store
+  storage_class: local-path
+  data_size: 8Gi
+  model_size: 8Gi
+  results_size: 8Gi
+  data_mount_path: /mnt/data
+  model_mount_path: /mnt/models
+  results_mount_path: /mnt/benchmarks
+
+model:
+  model_name: mambasl-cmapss
+  model_version: v1
+  model_pvc: model-store
+  model_subpath: mambasl-cmapss/v1
+  predictor_image: kfp-workflow:latest
+  service_name: sample-benchmark-svc
+  cleanup: true
+  resources:
+    cpu_request: "2"
+    cpu_limit: "2"
+    memory_request: 4Gi
+    memory_limit: 4Gi
+    gpu_request: "0"
+    gpu_limit: "0"
+
+scenario:
+  kind: inline
+  dataset:
+    kind: cmapss-timeseries
+    config:
+      fd_name: FD001
+      max_sections: 5
+  pipeline:
+    kind: sequential-replay
+    config:
+      interval_hz: 1.0
+
+metrics:
+  - kind: kepler-energy
+    config:
+      mode: dynamic

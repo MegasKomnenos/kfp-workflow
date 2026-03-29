@@ -5,8 +5,10 @@ from pathlib import Path
 import pytest
 
 from kfp_workflow.specs import (
+    BenchmarkSpec,
     PipelineSpec,
     ServingSpec,
+    load_benchmark_spec,
     load_pipeline_spec,
     load_serving_spec,
 )
@@ -31,6 +33,14 @@ def test_load_serving_spec():
     assert spec.runtime == "kserve-torchserve"
 
 
+def test_load_benchmark_spec():
+    spec = load_benchmark_spec(CONFIGS / "benchmarks" / "sample_benchmark.yaml")
+    assert isinstance(spec, BenchmarkSpec)
+    assert spec.metadata.name == "sample-benchmark"
+    assert spec.model.model_name == "mambasl-cmapss"
+    assert spec.storage.results_pvc == "benchmark-store"
+
+
 def test_pipeline_spec_defaults():
     spec = PipelineSpec(
         metadata={"name": "test"},
@@ -42,6 +52,20 @@ def test_pipeline_spec_defaults():
     assert spec.storage.data_pvc == "dataset-store"
     assert spec.storage.data_subpath == ""
     assert spec.runtime.torch_num_threads == 4
+
+
+def test_benchmark_spec_defaults():
+    spec = BenchmarkSpec(
+        metadata={"name": "bench"},
+        runtime={"namespace": "default"},
+        model={
+            "model_name": "mambasl-cmapss",
+            "model_subpath": "mambasl-cmapss/v1",
+        },
+        scenario={"kind": "inline"},
+    )
+    assert spec.storage.results_pvc == "benchmark-store"
+    assert spec.model.predictor_image == "kfp-workflow:latest"
 
 
 def test_pipeline_spec_rejects_missing_fields():
@@ -70,4 +94,18 @@ def test_serving_spec_rejects_file_like_model_subpath_for_custom_runtime():
             model_subpath="mambasl-cmapss/v1/model.pt",
             runtime="custom",
             predictor_image="kfp-workflow:latest",
+        )
+
+
+def test_benchmark_spec_rejects_long_service_name():
+    with pytest.raises(Exception, match="too long for KServe RawDeployment"):
+        BenchmarkSpec(
+            metadata={"name": "benchmark-name"},
+            runtime={"namespace": "kubeflow-user-example-com"},
+            model={
+                "model_name": "mambasl-cmapss",
+                "model_subpath": "mambasl-cmapss/v1",
+                "service_name": "benchmark-service-name-20260329-very-long-suffix",
+            },
+            scenario={"kind": "inline"},
         )

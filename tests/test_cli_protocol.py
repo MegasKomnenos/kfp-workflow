@@ -24,6 +24,18 @@ def test_pipeline_submit_help():
     assert "--spec" in result.output
 
 
+def test_benchmark_compile_help():
+    result = runner.invoke(app, ["benchmark", "compile", "--help"])
+    assert result.exit_code == 0
+    assert "--spec" in result.output
+
+
+def test_benchmark_submit_help():
+    result = runner.invoke(app, ["benchmark", "submit", "--help"])
+    assert result.exit_code == 0
+    assert "--spec" in result.output
+
+
 def test_serve_create_help():
     result = runner.invoke(app, ["serve", "create", "--help"])
     assert result.exit_code == 0

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import time
 from typing import Any, Dict, List, Optional
+
+from kubernetes import client as k8s_client
+from kubernetes import config as k8s_config
+from kubernetes.client.exceptions import ApiException
 
 
 def _ready_status(svc: Dict[str, Any]) -> str:
@@ -15,6 +18,20 @@ def _ready_status(svc: Dict[str, Any]) -> str:
         if cond.get("type") == "Ready":
             return cond.get("status", "Unknown")
     return "Unknown"
+
+
+def _load_config() -> None:
+    """Load in-cluster config when available, otherwise local kubeconfig."""
+    try:
+        k8s_config.load_incluster_config()
+    except Exception:
+        k8s_config.load_kube_config()
+
+
+def _custom_objects_api() -> Any:
+    """Return a configured Kubernetes custom-objects client."""
+    _load_config()
+    return k8s_client.CustomObjectsApi()
 
 
 def _condition_payloads(svc: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -181,37 +198,59 @@ def create_inference_service(
 
     if dry_run:
         return manifest
+    api = _custom_objects_api()
+    body = json.loads(json.dumps(manifest))
+    try:
+        existing = api.get_namespaced_custom_object(
+            group="serving.kserve.io",
+            version="v1beta1",
+            namespace=namespace,
+            plural="inferenceservices",
+            name=name,
+        )
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
+        api.create_namespaced_custom_object(
+            group="serving.kserve.io",
+            version="v1beta1",
+            namespace=namespace,
+            plural="inferenceservices",
+            body=body,
+        )
+        return manifest
 
-    subprocess.run(
-        ["kubectl", "apply", "-n", namespace, "-f", "-"],
-        input=json.dumps(manifest),
-        check=True,
-        text=True,
-        capture_output=True,
+    body["metadata"]["resourceVersion"] = existing.get("metadata", {}).get("resourceVersion")
+    api.replace_namespaced_custom_object(
+        group="serving.kserve.io",
+        version="v1beta1",
+        namespace=namespace,
+        plural="inferenceservices",
+        name=name,
+        body=body,
     )
     return manifest
 
 
 def delete_inference_service(name: str, namespace: str) -> None:
     """Delete a KServe InferenceService by name."""
-    subprocess.run(
-        [
-            "kubectl", "delete", "inferenceservice", name,
-            "-n", namespace,
-        ],
-        check=True,
-        text=True,
-        capture_output=True,
-    )
+    api = _custom_objects_api()
+    try:
+        api.delete_namespaced_custom_object(
+            group="serving.kserve.io",
+            version="v1beta1",
+            namespace=namespace,
+            plural="inferenceservices",
+            name=name,
+        )
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
 
 
 def list_inference_services(namespace: str) -> List[Dict[str, Any]]:
     """List InferenceServices in a namespace via the Kubernetes API."""
-    from kubernetes import client as k8s_client
-    from kubernetes import config as k8s_config
-
-    k8s_config.load_kube_config()
-    api = k8s_client.CustomObjectsApi()
+    api = _custom_objects_api()
     result = api.list_namespaced_custom_object(
         group="serving.kserve.io",
         version="v1beta1",
@@ -223,11 +262,7 @@ def list_inference_services(namespace: str) -> List[Dict[str, Any]]:
 
 def get_inference_service(name: str, namespace: str) -> Dict[str, Any]:
     """Get a single InferenceService by name."""
-    from kubernetes import client as k8s_client
-    from kubernetes import config as k8s_config
-
-    k8s_config.load_kube_config()
-    api = k8s_client.CustomObjectsApi()
+    api = _custom_objects_api()
     return api.get_namespaced_custom_object(
         group="serving.kserve.io",
         version="v1beta1",
@@ -245,10 +280,7 @@ def get_inference_service_events(
     event_type: Optional[str] = "Warning",
 ) -> List[Dict[str, str]]:
     """Return recent Kubernetes events for an InferenceService."""
-    from kubernetes import client as k8s_client
-    from kubernetes import config as k8s_config
-
-    k8s_config.load_kube_config()
+    _load_config()
     v1 = k8s_client.CoreV1Api()
     selector = (
         f"involvedObject.kind=InferenceService,"
@@ -307,5 +339,29 @@ def wait_for_inference_service_ready(
             continue
         if latest["ready"] == "True":
             return latest
-        time.sleep(poll_interval)
+            time.sleep(poll_interval)
     return latest
+
+
+def get_predictor_pod_name(
+    name: str,
+    namespace: str,
+) -> str:
+    """Return the running predictor pod name for an InferenceService."""
+    _load_config()
+    v1 = k8s_client.CoreV1Api()
+    pods = v1.list_namespaced_pod(
+        namespace=namespace,
+        label_selector=f"serving.kserve.io/inferenceservice={name}",
+    ).items
+    running = [
+        pod.metadata.name
+        for pod in pods
+        if getattr(getattr(pod, "status", None), "phase", "") == "Running"
+    ]
+    if not running:
+        raise RuntimeError(
+            f"No running predictor pod found for InferenceService '{name}' in namespace '{namespace}'."
+        )
+    running.sort()
+    return running[0]
