@@ -172,7 +172,8 @@ The Dockerfile installs:
 ```bash
 docker build -t kfp-workflow:latest -f docker/Dockerfile .
 # Prefer pushing a versioned tag to a registry when possible.
-docker save kfp-workflow:latest | sudo ctr -n k8s.io images import -
+docker save kfp-workflow:latest -o /tmp/kfp-workflow-latest.tar
+# Then follow the helper-pod + nerdctl import flow in the Docker Build section above.
 ```
 
 ### 2. Bootstrap cluster storage
@@ -215,7 +216,8 @@ kfp-workflow serve get --name mrhysp-cmapss-serving
 ### 1. Build and import Docker image
 ```bash
 docker build -t kfp-workflow:latest -f docker/Dockerfile .
-docker save kfp-workflow:latest | sudo ctr -n k8s.io images import -
+docker save kfp-workflow:latest -o /tmp/kfp-workflow-latest.tar
+# Then follow the helper-pod + nerdctl import flow in the Docker Build section above.
 ```
 
 ### 2. Bootstrap cluster storage

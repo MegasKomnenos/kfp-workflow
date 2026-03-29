@@ -49,7 +49,8 @@ test/
 │   ├── 08_클러스터_부트스트랩.md       # PVC provisioning via cluster bootstrap
 │   ├── 09_Docker_이미지_빌드.md       # Docker image build and optimization
 │   ├── 10_새_모델_플러그인_개발.md    # ModelPlugin ABC full implementation guide (architecture, stages, serving, HPO, testing)
-│   └── 11_하이퍼파라미터_튜닝.md     # Optuna/Katib HPO execution and management
+│   ├── 11_하이퍼파라미터_튜닝.md     # Optuna/Katib HPO execution and management
+│   └── 12_벤치마크_워크플로우.md     # BenchmarkSpec, scenario/metric refs, smoke benchmark execution
 │
 ├── kubeflow/
 │   └── pvc/
