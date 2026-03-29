@@ -22,6 +22,10 @@ from kfp_workflow.plugins.base import (
     SaveResult,
     TrainResult,
 )
+from kfp_workflow.plugins.cmapss_utils import (
+    cmapss_storage_root,
+    resolve_cmapss_data_dir,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -115,9 +119,10 @@ class MambaSLCmapssPlugin(ModelPlugin):
 
         ds_cfg = spec["dataset"].get("config", {})
         fd_name = ds_cfg.get("fd_name", "FD001")
+        storage_root = cmapss_storage_root(data_mount_path)
 
         data_spec = DataSpec(
-            data_root=str(Path(data_mount_path) / "cmapss"),
+            data_root=str(storage_root),
             download_policy=ds_cfg.get("download_policy", "if_missing"),
             nasa_url=ds_cfg.get(
                 "nasa_url",
@@ -127,10 +132,11 @@ class MambaSLCmapssPlugin(ModelPlugin):
         )
 
         _, extract_dir = ensure_cmapss_downloaded(data_spec)
-        train_df, test_df, rul_test = load_fd(extract_dir, fd_name)
+        data_dir = resolve_cmapss_data_dir(str(extract_dir))
+        train_df, test_df, rul_test = load_fd(data_dir, fd_name)
 
         return LoadDataResult(
-            data_dir=str(extract_dir),
+            data_dir=str(data_dir),
             dataset_name=fd_name,
             num_train_samples=len(train_df),
             num_test_samples=len(test_df),
@@ -390,31 +396,67 @@ class MambaSLCmapssPlugin(ModelPlugin):
 
     # -- Inference ----------------------------------------------------------
 
+    def load_serving_artifact(
+        self,
+        model_path: str,
+        model_config: Dict[str, Any],
+    ) -> Any:
+        import torch
+        from mambasl_new.cmapss.model import build_model, configure_device
+
+        cfg = model_config.get("cfg", model_config)
+        device = configure_device(prefer_gpu=False)
+        model = build_model(
+            cfg,
+            c_in=int(model_config.get("feature_dim", 1)),
+            seq_len=int(model_config.get("seq_len", 1)),
+            device=device,
+        )
+        state_dict = torch.load(model_path, map_location=device, weights_only=True)
+        model.load_state_dict(state_dict)
+        model.eval()
+        return {"model": model, "device": device}
+
+    def warmup_serving_artifact(
+        self,
+        artifact: Any,
+        model_config: Dict[str, Any],
+    ) -> None:
+        import numpy as np
+        import torch
+
+        seq_len = int(model_config.get("seq_len", 1))
+        feature_dim = int(model_config.get("feature_dim", 1))
+        sample = torch.from_numpy(
+            np.zeros((1, seq_len, feature_dim), dtype=np.float32)
+        ).to(artifact["device"])
+        with torch.no_grad():
+            artifact["model"](sample)
+
+    def predict_loaded(
+        self,
+        artifact: Any,
+        input_data: Any,
+        model_config: Dict[str, Any],
+    ) -> Any:
+        from mambasl_new.cmapss.train import predict_array
+
+        cfg = model_config.get("cfg", model_config)
+        return predict_array(
+            artifact["model"],
+            input_data,
+            float(cfg.get("max_rul", 125.0)),
+            device=artifact["device"],
+        )
+
     def predict(
         self,
         model_path: str,
         input_data: Any,
         model_config: Dict[str, Any],
     ) -> Any:
-        import torch
-        from mambasl_new.cmapss.model import build_model, configure_device
-        from mambasl_new.cmapss.train import predict_array
-
-        cfg = model_config.get("cfg", model_config)
-        device = configure_device(prefer_gpu=False)
-
-        model = build_model(
-            cfg,
-            c_in=int(model_config.get("feature_dim", input_data.shape[2])),
-            seq_len=int(model_config.get("seq_len", input_data.shape[1])),
-            device=device,
-        )
-        state_dict = torch.load(model_path, map_location=device, weights_only=True)
-        model.load_state_dict(state_dict)
-
-        return predict_array(
-            model, input_data, float(cfg.get("max_rul", 125.0)), device=device,
-        )
+        artifact = self.load_serving_artifact(model_path, model_config)
+        return self.predict_loaded(artifact, input_data, model_config)
 
     # -- HPO hooks ----------------------------------------------------------
 

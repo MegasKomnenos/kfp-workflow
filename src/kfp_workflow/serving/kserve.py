@@ -4,7 +4,52 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from typing import Any, Dict, List, Optional
+
+
+def _ready_status(svc: Dict[str, Any]) -> str:
+    """Return the Ready condition status for an InferenceService."""
+    conditions = svc.get("status", {}).get("conditions", [])
+    for cond in conditions:
+        if cond.get("type") == "Ready":
+            return cond.get("status", "Unknown")
+    return "Unknown"
+
+
+def _condition_payloads(svc: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Normalize InferenceService conditions for CLI output."""
+    payloads: List[Dict[str, str]] = []
+    for cond in svc.get("status", {}).get("conditions", []):
+        payloads.append({
+            "type": cond.get("type", ""),
+            "status": cond.get("status", ""),
+            "reason": cond.get("reason", ""),
+            "message": cond.get("message", ""),
+            "lastTransitionTime": cond.get("lastTransitionTime", ""),
+        })
+    return payloads
+
+
+def _event_timestamp(event: Any) -> Any:
+    """Best-effort sort key for Kubernetes events."""
+    return (
+        getattr(event, "last_timestamp", None)
+        or getattr(event, "event_time", None)
+        or getattr(event, "first_timestamp", None)
+        or getattr(getattr(event, "metadata", None), "creation_timestamp", None)
+    )
+
+
+def _event_payload(event: Any) -> Dict[str, str]:
+    """Normalize a Kubernetes event for CLI output."""
+    return {
+        "type": getattr(event, "type", "") or "",
+        "reason": getattr(event, "reason", "") or "",
+        "message": getattr(event, "message", "") or "",
+        "count": str(getattr(event, "count", "") or ""),
+        "lastTimestamp": str(_event_timestamp(event) or ""),
+    }
 
 
 def build_inference_service_manifest(
@@ -190,3 +235,77 @@ def get_inference_service(name: str, namespace: str) -> Dict[str, Any]:
         plural="inferenceservices",
         name=name,
     )
+
+
+def get_inference_service_events(
+    name: str,
+    namespace: str,
+    *,
+    limit: int = 5,
+    event_type: Optional[str] = "Warning",
+) -> List[Dict[str, str]]:
+    """Return recent Kubernetes events for an InferenceService."""
+    from kubernetes import client as k8s_client
+    from kubernetes import config as k8s_config
+
+    k8s_config.load_kube_config()
+    v1 = k8s_client.CoreV1Api()
+    selector = (
+        f"involvedObject.kind=InferenceService,"
+        f"involvedObject.name={name}"
+    )
+    result = v1.list_namespaced_event(namespace=namespace, field_selector=selector)
+    items = result.items or []
+    if event_type:
+        items = [event for event in items if getattr(event, "type", None) == event_type]
+    items = sorted(items, key=_event_timestamp)
+    if limit > 0:
+        items = items[-limit:]
+    return [_event_payload(event) for event in items]
+
+
+def get_inference_service_diagnostics(
+    name: str,
+    namespace: str,
+    *,
+    event_limit: int = 5,
+) -> Dict[str, Any]:
+    """Return an InferenceService plus normalized conditions and warnings."""
+    svc = get_inference_service(name=name, namespace=namespace)
+    return {
+        "service": svc,
+        "ready": _ready_status(svc),
+        "conditions": _condition_payloads(svc),
+        "events": get_inference_service_events(
+            name=name,
+            namespace=namespace,
+            limit=event_limit,
+        ),
+    }
+
+
+def wait_for_inference_service_ready(
+    name: str,
+    namespace: str,
+    *,
+    timeout: int = 300,
+    poll_interval: float = 2.0,
+) -> Dict[str, Any]:
+    """Poll an InferenceService until Ready=True or timeout expires."""
+    deadline = time.time() + timeout
+    latest: Dict[str, Any] = {
+        "service": {},
+        "ready": "Unknown",
+        "conditions": [],
+        "events": [],
+    }
+    while time.time() < deadline:
+        try:
+            latest = get_inference_service_diagnostics(name=name, namespace=namespace)
+        except Exception:
+            time.sleep(poll_interval)
+            continue
+        if latest["ready"] == "True":
+            return latest
+        time.sleep(poll_interval)
+    return latest

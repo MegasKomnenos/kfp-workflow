@@ -62,7 +62,7 @@ class TrainResult:
     """Output of ``ModelPlugin.train``."""
 
     model_path: str
-    """Path to saved model state-dict (``.pt``) file."""
+    """Path to the saved model artifact used for evaluation and serving."""
 
     best_epoch: int
     train_loss: float
@@ -274,6 +274,40 @@ class ModelPlugin(ABC):
     def train_config_schema(cls) -> Optional[Type]:
         """Return a Pydantic model for ``train`` section validation."""
         return None
+
+    @classmethod
+    def serving_model_filenames(cls) -> List[str]:
+        """Return preferred model artifact filenames for serving lookup."""
+        return ["model.pt"]
+
+    def load_serving_artifact(
+        self,
+        model_path: str,
+        model_config: Dict[str, Any],
+    ) -> Any:
+        """Load and return a serving artifact for reuse across requests."""
+        return model_path
+
+    def warmup_serving_artifact(
+        self,
+        artifact: Any,
+        model_config: Dict[str, Any],
+    ) -> None:
+        """Perform optional startup warmup before the predictor becomes ready."""
+        return None
+
+    def predict_loaded(
+        self,
+        artifact: Any,
+        input_data: Any,
+        model_config: Dict[str, Any],
+    ) -> Any:
+        """Run inference using a pre-loaded serving artifact."""
+        return self.predict(
+            model_path=str(artifact),
+            input_data=input_data,
+            model_config=model_config,
+        )
 
     # -- Inference ----------------------------------------------------------
 

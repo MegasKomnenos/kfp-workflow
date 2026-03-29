@@ -1,0 +1,63 @@
+metadata:
+  name: mambasl-new-fd-all-aggressive
+  description: Aggressive four-dataset Kubeflow and Katib workflow
+runtime:
+  namespace: kubeflow-user-example-com
+  pipeline_root: s3://mlpipeline/mambasl-new/fd-all-aggressive
+  image: mambasl-new:latest
+  image_pull_policy: IfNotPresent
+  service_account: default-editor
+  use_gpu: true
+  torch_num_threads: 8
+  resources:
+    cpu_request: "8"
+    cpu_limit: "8"
+    memory_request: 24Gi
+    memory_limit: 24Gi
+    gpu_request: "1"
+    gpu_limit: "1"
+storage:
+  mode: pvc
+  data_pvc: cmapss-data
+  results_pvc: cmapss-results
+  storage_class: local-path
+  data_size: 8Gi
+  results_size: 32Gi
+  data_mount_path: /mnt/data
+  results_mount_path: /mnt/results
+datasets:
+  items: [FD001, FD002, FD003, FD004]
+stages: [hpo, final_train_eval, ablation_sweep, aggregate_reports]
+train_defaults:
+  seed: 42
+  feature_mode: settings_plus_sensors
+  norm_mode: condition_minmax
+  selection_metric: hybrid
+  score_weight: 0.01
+  val_mode: pseudo_test
+  val_pseudo_samples: 5
+  val_min_history: 30
+  refit_full_train: true
+  hpo_train_stride: 2
+  hpo_val_stride: 2
+  hpo_max_epochs: 40
+  hpo_patience: 8
+  final_max_epochs: 90
+  final_patience: 12
+hpo:
+  enabled: true
+  builtin_profile: aggressive
+  algorithm: random
+  max_trial_count: 32
+  parallel_trial_count: 4
+  max_failed_trial_count: 5
+  search_space: []
+ablations:
+  enabled: true
+  axes:
+    feature_mode: [settings_plus_sensors, sensors_only]
+    norm_mode: [global_standard, condition_standard, condition_minmax]
+  base_overrides: {}
+outputs:
+  local_results_dir: results
+  retain_model_state: false

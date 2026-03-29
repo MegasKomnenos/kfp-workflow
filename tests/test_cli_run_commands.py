@@ -47,12 +47,14 @@ def _mock_experiment(
 # pipeline run get
 # ---------------------------------------------------------------------------
 
+@patch("kfp_workflow.cli.main._find_workflow_for_run")
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
-def test_run_get(mock_conn):
+def test_run_get(mock_conn, mock_workflow):
     mock_client = MagicMock()
     mock_client.get_run.return_value = _mock_run()
     mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+    mock_workflow.return_value = None
 
     result = runner.invoke(app, ["pipeline", "run", "get", "abc-12345-def"])
     assert result.exit_code == 0
@@ -61,18 +63,24 @@ def test_run_get(mock_conn):
     mock_client.get_run.assert_called_once_with(run_id="abc-12345-def")
 
 
+@patch("kfp_workflow.cli.main._find_workflow_for_run")
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
-def test_run_get_json(mock_conn):
+def test_run_get_json(mock_conn, mock_workflow):
     mock_client = MagicMock()
     mock_client.get_run.return_value = _mock_run()
     mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+    mock_workflow.return_value = {
+        "metadata": {"name": "workflow-123"},
+        "status": {"phase": "Succeeded", "progress": "5/5"},
+    }
 
     result = runner.invoke(app, ["--json", "pipeline", "run", "get", "abc-12345-def"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["run_id"] == "abc-12345-def"
     assert data["state"] == "SUCCEEDED"
+    assert data["workflow_name"] == "workflow-123"
 
 
 # ---------------------------------------------------------------------------
@@ -127,27 +135,60 @@ def test_run_terminate(mock_conn):
 # pipeline run wait
 # ---------------------------------------------------------------------------
 
+@patch("kfp_workflow.cli.main._find_workflow_for_run")
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
-def test_run_wait_success(mock_conn):
+def test_run_wait_success(mock_conn, mock_workflow):
     mock_client = MagicMock()
     mock_client.wait_for_run_completion.return_value = _mock_run(state_value="SUCCEEDED")
     mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+    mock_workflow.return_value = {
+        "metadata": {"name": "workflow-123"},
+        "status": {"phase": "Succeeded", "progress": "5/5"},
+    }
 
     result = runner.invoke(app, ["pipeline", "run", "wait", "abc-12345-def"])
     assert result.exit_code == 0
     assert "SUCCEEDED" in result.output
+    assert "workflow-123" in result.output
 
 
+@patch("kfp_workflow.cli.main._find_workflow_for_run")
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
-def test_run_wait_failure(mock_conn):
+def test_run_wait_failure(mock_conn, mock_workflow):
     mock_client = MagicMock()
     mock_client.wait_for_run_completion.return_value = _mock_run(state_value="FAILED")
     mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+    mock_workflow.return_value = None
 
     result = runner.invoke(app, ["pipeline", "run", "wait", "abc-12345-def"])
     assert result.exit_code == 1
+
+
+@patch("kfp_workflow.cli.main._find_workflow_for_run")
+@patch("kfp_workflow.pipeline.connection.kfp_connection")
+def test_run_wait_timeout_shows_workflow_diagnostics(mock_conn, mock_workflow):
+    mock_client = MagicMock()
+    mock_client.wait_for_run_completion.side_effect = TimeoutError("timed out")
+    mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_conn.return_value.__exit__ = MagicMock(return_value=False)
+    mock_workflow.return_value = {
+        "metadata": {"name": "workflow-123"},
+        "status": {
+            "phase": "Running",
+            "progress": "4/5",
+            "message": "save-model pending",
+            "nodes": {
+                "n1": {"displayName": "save-model", "phase": "Pending"},
+            },
+        },
+    }
+
+    result = runner.invoke(app, ["pipeline", "run", "wait", "abc-12345-def", "--timeout", "1"])
+    assert result.exit_code == 1
+    assert "workflow-123" in result.output
+    assert "save-model" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -189,17 +230,25 @@ def test_serve_list(mock_list):
     assert "my-isvc" in result.output
 
 
-@patch("kfp_workflow.serving.kserve.get_inference_service")
+@patch("kfp_workflow.serving.kserve.get_inference_service_diagnostics")
 def test_serve_get(mock_get):
     mock_get.return_value = {
-        "metadata": {"name": "my-isvc", "creationTimestamp": "2026-03-22"},
-        "status": {
-            "url": "http://my-isvc.example.com",
-            "conditions": [
-                {"type": "Ready", "status": "True"},
-                {"type": "PredictorReady", "status": "True"},
-            ],
+        "service": {
+            "metadata": {"name": "my-isvc", "creationTimestamp": "2026-03-22"},
+            "status": {
+                "url": "http://my-isvc.example.com",
+                "conditions": [
+                    {"type": "Ready", "status": "True"},
+                    {"type": "PredictorReady", "status": "True"},
+                ],
+            },
         },
+        "ready": "True",
+        "conditions": [
+            {"type": "Ready", "status": "True", "reason": "", "message": ""},
+            {"type": "PredictorReady", "status": "True", "reason": "", "message": ""},
+        ],
+        "events": [],
     }
 
     result = runner.invoke(app, ["serve", "get", "--name", "my-isvc"])
@@ -208,14 +257,19 @@ def test_serve_get(mock_get):
     assert "True" in result.output
 
 
-@patch("kfp_workflow.serving.kserve.get_inference_service")
+@patch("kfp_workflow.serving.kserve.get_inference_service_diagnostics")
 def test_serve_get_json(mock_get):
     mock_get.return_value = {
-        "metadata": {"name": "my-isvc", "creationTimestamp": "2026-03-22"},
-        "status": {
-            "url": "http://my-isvc.example.com",
-            "conditions": [{"type": "Ready", "status": "True"}],
+        "service": {
+            "metadata": {"name": "my-isvc", "creationTimestamp": "2026-03-22"},
+            "status": {
+                "url": "http://my-isvc.example.com",
+                "conditions": [{"type": "Ready", "status": "True"}],
+            },
         },
+        "ready": "True",
+        "conditions": [{"type": "Ready", "status": "True", "reason": "", "message": ""}],
+        "events": [{"type": "Warning", "reason": "InternalError", "message": "bad host"}],
     }
 
     result = runner.invoke(app, ["--json", "serve", "get", "--name", "my-isvc"])
@@ -223,3 +277,27 @@ def test_serve_get_json(mock_get):
     data = json.loads(result.output)
     assert data["name"] == "my-isvc"
     assert data["ready"] == "True"
+    assert data["events"][0]["reason"] == "InternalError"
+
+
+@patch("kfp_workflow.serving.kserve.wait_for_inference_service_ready")
+@patch("kfp_workflow.serving.kserve.create_inference_service")
+def test_serve_create_wait_failure(mock_create, mock_wait):
+    mock_create.return_value = {"metadata": {"name": "sample-serving"}}
+    mock_wait.return_value = {
+        "ready": "Unknown",
+        "conditions": [],
+        "events": [{"reason": "InternalError", "message": "name too long"}],
+    }
+
+    result = runner.invoke(
+        app,
+        [
+            "serve", "create",
+            "--spec", "configs/serving/sample_serve.yaml",
+            "--wait",
+            "--timeout", "1",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "name too long" in result.output

@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import json
 import shutil
+import warnings
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -31,6 +32,10 @@ from kfp_workflow.plugins.base import (
     PreprocessResult,
     SaveResult,
     TrainResult,
+)
+from kfp_workflow.plugins.cmapss_utils import (
+    cmapss_storage_root,
+    resolve_cmapss_data_dir,
 )
 
 
@@ -62,7 +67,8 @@ class MRHySPDatasetConfig(BaseModel):
     fd_name: str = "FD001"
     feature_mode: str = "selected"
     scaling_mode: str = "condition"
-    download_if_missing: bool = False
+    download_policy: Literal["never", "if_missing", "always"] = "never"
+    download_if_missing: Optional[bool] = None
 
     model_config = ConfigDict(extra="allow")
 
@@ -117,6 +123,28 @@ def _build_cfg(spec: Dict[str, Any]) -> Dict[str, Any]:
     return cfg
 
 
+def _download_policy(ds_cfg: Dict[str, Any]) -> str:
+    """Normalize legacy and current download policy fields."""
+    if "download_policy" in ds_cfg:
+        return str(ds_cfg.get("download_policy") or "never")
+
+    if "download_if_missing" in ds_cfg:
+        warnings.warn(
+            "dataset.config.download_if_missing is deprecated; "
+            "use dataset.config.download_policy instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return "if_missing" if ds_cfg.get("download_if_missing") else "never"
+
+    return "never"
+
+
+def _resolve_cmapss_data_dir(data_mount_path: str) -> Path:
+    """Backward-compatible alias for the shared C-MAPSS resolver."""
+    return resolve_cmapss_data_dir(data_mount_path)
+
+
 class MRHySPCmapssPlugin(ModelPlugin):
     """MR-HY-SP ensemble trained/evaluated on C-MAPSS turbofan degradation data.
 
@@ -137,6 +165,10 @@ class MRHySPCmapssPlugin(ModelPlugin):
     def dataset_config_schema(cls):
         return MRHySPDatasetConfig
 
+    @classmethod
+    def serving_model_filenames(cls):
+        return ["model.joblib", "model.pt"]
+
     # -- Stage 1: load_data ------------------------------------------------
 
     def load_data(
@@ -153,11 +185,13 @@ class MRHySPCmapssPlugin(ModelPlugin):
 
         ds_cfg = spec["dataset"].get("config", {})
         fd_name = ds_cfg.get("fd_name", "FD001")
+        storage_root = cmapss_storage_root(data_mount_path)
+        download_policy = _download_policy(ds_cfg)
 
-        data_dir = Path(data_mount_path) / "cmapss"
+        if download_policy in {"if_missing", "always"}:
+            ensure_cmapss_downloaded(storage_root)
 
-        if ds_cfg.get("download_if_missing", False):
-            ensure_cmapss_downloaded(data_dir)
+        data_dir = resolve_cmapss_data_dir(data_mount_path)
 
         train_raw = load_split(data_dir / f"train_{fd_name}.txt")
         test_raw = load_split(data_dir / f"test_{fd_name}.txt")
@@ -449,23 +483,48 @@ class MRHySPCmapssPlugin(ModelPlugin):
 
     # -- Inference ----------------------------------------------------------
 
+    def load_serving_artifact(
+        self,
+        model_path: str,
+        model_config: Dict[str, Any],
+    ) -> Any:
+        import joblib
+
+        return joblib.load(model_path)
+
+    def warmup_serving_artifact(
+        self,
+        artifact: Any,
+        model_config: Dict[str, Any],
+    ) -> None:
+        import numpy as np
+
+        feature_dim = int(model_config.get("feature_dim", 1))
+        seq_len = int(model_config.get("seq_len", 1))
+        sample = np.zeros((1, feature_dim, seq_len), dtype=np.float64)
+        artifact.predict(sample)
+
+    def predict_loaded(
+        self,
+        artifact: Any,
+        input_data: Any,
+        model_config: Dict[str, Any],
+    ) -> Any:
+        import numpy as np
+
+        cfg = model_config.get("cfg", model_config)
+        max_rul = float(cfg.get("max_rul", 125))
+        preds = artifact.predict(np.asarray(input_data, dtype=np.float64))
+        return np.clip(preds, 0.0, max_rul)
+
     def predict(
         self,
         model_path: str,
         input_data: Any,
         model_config: Dict[str, Any],
     ) -> Any:
-        import joblib
-        import numpy as np
-
-        model = joblib.load(model_path)
-
-        cfg = model_config.get("cfg", model_config)
-        max_rul = float(cfg.get("max_rul", 125))
-
-        # input_data must be (N, C, T) channels-first
-        preds = model.predict(np.asarray(input_data, dtype=np.float64))
-        return np.clip(preds, 0.0, max_rul)
+        artifact = self.load_serving_artifact(model_path, model_config)
+        return self.predict_loaded(artifact, input_data, model_config)
 
     # -- HPO hooks ----------------------------------------------------------
 

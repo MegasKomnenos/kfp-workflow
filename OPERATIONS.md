@@ -4,7 +4,7 @@
 
 | Key | Value |
 |-----|-------|
-| Python | `>=3.9` (Docker image: 3.11.9) |
+| Python | `>=3.10` (Docker image: 3.11.9) |
 | Namespace | `kubeflow-user-example-com` |
 | KFP SDK | `2.15.0` |
 | Container image | `kfp-workflow:latest` |
@@ -105,7 +105,8 @@ kfp-workflow --json tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
 # Build image with mamba_ssm + mambasl-new (from models/mambasl-new/)
 docker build -t kfp-workflow:latest -f docker/Dockerfile .
 
-# Import into containerd for k8s
+# Preferred: push a tagged image to a registry and reference that tag in specs
+# Fallback for local clusters: import into containerd for k8s
 docker save kfp-workflow:latest | sudo ctr -n k8s.io images import -
 ```
 
@@ -120,6 +121,7 @@ The Dockerfile installs:
 ### 1. Build and import Docker image
 ```bash
 docker build -t kfp-workflow:latest -f docker/Dockerfile .
+# Prefer pushing a versioned tag to a registry when possible.
 docker save kfp-workflow:latest | sudo ctr -n k8s.io images import -
 ```
 
@@ -179,7 +181,7 @@ kfp-workflow cluster bootstrap \
 ### 3. Register dataset
 ```bash
 kfp-workflow registry dataset register \
-  --name cmapss --pvc-name dataset-store --subpath CMAPSSData
+  --name cmapss --pvc-name dataset-store --subpath cmapss/CMAPSSData
 ```
 
 ### 4. Compile pipeline

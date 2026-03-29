@@ -2,7 +2,8 @@
 
 Reads env vars:
 - ``MODEL_PLUGIN_NAME``: model name for plugin lookup (e.g. ``mambasl-cmapss``)
-- ``MODEL_DIR``: path to model directory containing ``model.pt`` + ``model_config.json``
+- ``MODEL_DIR``: path to model directory containing the model artifact
+  and ``model_config.json``
 - ``MODEL_NAME``: KServe model name for registration
 
 Entrypoint: ``python -m kfp_workflow.serving.predictor``
@@ -28,6 +29,7 @@ class PluginPredictor(kserve.Model):
         self._plugin = None
         self._model_config: dict = {}
         self._model_path: str = ""
+        self._artifact = None
 
     def load(self) -> None:
         """Load model config and prepare plugin for inference."""
@@ -39,11 +41,28 @@ class PluginPredictor(kserve.Model):
         if config_path.exists():
             self._model_config = json.loads(config_path.read_text("utf-8"))
 
-        model_path = self._model_dir / "model.pt"
-        if not model_path.exists():
-            raise FileNotFoundError(f"Model file not found: {model_path}")
-        self._model_path = str(model_path)
+        candidates = [
+            self._model_dir / filename
+            for filename in self._plugin.serving_model_filenames()
+        ]
+        for model_path in candidates:
+            if model_path.exists():
+                self._model_path = str(model_path)
+                break
+        else:
+            raise FileNotFoundError(
+                "Model file not found. Tried: "
+                + ", ".join(str(path) for path in candidates)
+            )
 
+        self._artifact = self._plugin.load_serving_artifact(
+            model_path=self._model_path,
+            model_config=self._model_config,
+        )
+        self._plugin.warmup_serving_artifact(
+            artifact=self._artifact,
+            model_config=self._model_config,
+        )
         self.ready = True
 
     def predict(
@@ -57,13 +76,14 @@ class PluginPredictor(kserve.Model):
 
             {"instances": [[[...], [...], ...], ...]}
 
-        where ``instances`` is a list of 2-D windows (seq_len x features).
+        where ``instances`` is a list of 2-D windows in the plugin's
+        expected feature layout.
         """
         instances = payload.get("instances", [])
         input_array = np.array(instances, dtype=np.float32)
 
-        predictions = self._plugin.predict(
-            model_path=self._model_path,
+        predictions = self._plugin.predict_loaded(
+            artifact=self._artifact,
             input_data=input_array,
             model_config=self._model_config,
         )

@@ -4,6 +4,7 @@
 test/
 ├── .gitignore
 ├── CLAUDE.md                          # AI agent directives
+├── AGENTS.md                          # AI agent directives
 ├── Makefile                           # venv, install, test, compile, docker-build
 ├── OPERATIONS.md                      # Operational patterns and procedures
 ├── PROJECT.md                         # This file — directory inventory

@@ -12,6 +12,8 @@ build/
 .venv/
 venv/
 ENV/
+.claude/
+.pytest_cache/
 
 # IDE
 .idea/

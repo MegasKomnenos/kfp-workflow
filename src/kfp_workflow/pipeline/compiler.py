@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+
 from kfp import compiler, dsl
-from kfp.kubernetes import mount_pvc, set_image_pull_policy
 
 from kfp_workflow.components import (
     evaluate_component,
@@ -16,6 +18,34 @@ from kfp_workflow.components import (
 )
 from kfp_workflow.specs import PipelineSpec
 from kfp_workflow.utils import ensure_parent
+
+
+def _set_image_pull_policy(task: dsl.PipelineTask, policy: str) -> dsl.PipelineTask:
+    """Set image pull policy without relying on protobuf JSON helpers."""
+    kube_config = dict(task.platform_config.get("kubernetes", {}))
+    kube_config["imagePullPolicy"] = policy
+    task.platform_config["kubernetes"] = kube_config
+    return task
+
+
+def _mount_pvc(task: dsl.PipelineTask, pvc_name: str, mount_path: str) -> dsl.PipelineTask:
+    """Mount a PVC without relying on protobuf JSON helpers."""
+    kube_config = dict(task.platform_config.get("kubernetes", {}))
+    mounts = list(kube_config.get("pvcMount", []))
+    mounts.append({
+        "constant": pvc_name,
+        "mountPath": mount_path,
+        "pvcNameParameter": {
+            "runtimeValue": {
+                "constant": {
+                    "stringValue": pvc_name,
+                }
+            }
+        },
+    })
+    kube_config["pvcMount"] = mounts
+    task.platform_config["kubernetes"] = kube_config
+    return task
 
 
 def _configure_task(task: dsl.PipelineTask, spec: PipelineSpec) -> dsl.PipelineTask:
@@ -30,22 +60,19 @@ def _configure_task(task: dsl.PipelineTask, spec: PipelineSpec) -> dsl.PipelineT
     if spec.runtime.use_gpu:
         task = task.set_gpu_limit(res.gpu_limit)
 
-    # Set image pull policy
-    set_image_pull_policy(task, spec.runtime.image_pull_policy)
-
     # Mount data PVC (read-only for all steps)
-    mount_pvc(
+    _mount_pvc(
         task,
         pvc_name=spec.storage.data_pvc,
         mount_path=spec.storage.data_mount_path,
     )
     # Mount model PVC (read-write for saving weights)
-    mount_pvc(
+    _mount_pvc(
         task,
         pvc_name=spec.storage.model_pvc,
         mount_path=spec.storage.model_mount_path,
     )
-    return task
+    return _set_image_pull_policy(task, spec.runtime.image_pull_policy)
 
 
 def build_pipeline(spec: PipelineSpec):

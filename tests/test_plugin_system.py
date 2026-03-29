@@ -1,6 +1,7 @@
 """Tests for the model plugin system."""
 
 import pytest
+from pathlib import Path
 
 from kfp_workflow.plugins import get_plugin, get_plugin_registry
 from kfp_workflow.plugins.base import (
@@ -202,6 +203,49 @@ def test_mrhysp_build_cfg_enforces_mr_num_kernels_multiple():
     }
     cfg = _build_cfg(spec)
     assert cfg["mr_num_kernels"] == 168  # 200 // 84 * 84 = 168
+
+
+def test_mrhysp_resolve_cmapss_data_dir_prefers_extracted_subdir(tmp_path: Path):
+    """MR-HY-SP should support the seeded ``cmapss/CMAPSSData`` layout."""
+    from kfp_workflow.plugins.mrhysp_cmapss import _resolve_cmapss_data_dir
+
+    extracted = tmp_path / "cmapss" / "CMAPSSData"
+    extracted.mkdir(parents=True)
+    (extracted / "train_FD001.txt").write_text("1 1 0 0\n", encoding="utf-8")
+
+    resolved = _resolve_cmapss_data_dir(str(tmp_path))
+    assert resolved == extracted
+
+
+def test_mrhysp_resolve_cmapss_data_dir_falls_back_to_base_dir(tmp_path: Path):
+    """MR-HY-SP should still support files extracted directly under ``cmapss``."""
+    from kfp_workflow.plugins.mrhysp_cmapss import _resolve_cmapss_data_dir
+
+    base = tmp_path / "cmapss"
+    base.mkdir(parents=True)
+    (base / "train_FD001.txt").write_text("1 1 0 0\n", encoding="utf-8")
+
+    resolved = _resolve_cmapss_data_dir(str(tmp_path))
+    assert resolved == base
+
+
+def test_shared_cmapss_resolver_supports_registry_subpath(tmp_path: Path):
+    from kfp_workflow.plugins.cmapss_utils import resolve_cmapss_data_dir
+
+    extracted = tmp_path / "CMAPSSData"
+    extracted.mkdir(parents=True)
+    (extracted / "train_FD001.txt").write_text("1 1 0 0\n", encoding="utf-8")
+
+    resolved = resolve_cmapss_data_dir(str(tmp_path))
+    assert resolved == extracted
+
+
+def test_mrhysp_download_policy_alias_warns():
+    from kfp_workflow.plugins.mrhysp_cmapss import _download_policy
+
+    with pytest.warns(DeprecationWarning, match="download_if_missing"):
+        policy = _download_policy({"download_if_missing": True})
+    assert policy == "if_missing"
 
 
 # ---------------------------------------------------------------------------

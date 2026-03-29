@@ -1,0 +1,17 @@
+profile: aggressive
+parameters:
+  - name: d_model
+    type: categorical
+    values: [32, 64, 128]
+  - name: d_state
+    type: categorical
+    values: [8, 16, 32]
+  - name: d_conv
+    type: categorical
+    values: [2, 3, 4]
+  - name: expand
+    type: categorical
+    values: [1, 2]
+  - name: num_kernels
+    type: categorical
+    values: [0, 3, 5, 7]

@@ -7,15 +7,15 @@ name = "kfp-workflow"
 version = "0.1.0"
 description = "KFP v2 training pipeline and KServe serving workflow manager"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
     "einops>=0.8,<0.9",
     "kfp[kubernetes]==2.15.0",
     "kubernetes>=29,<31",
-    "numpy>=1.24,<2",
+    "numpy>=1.26,<2",
     "optuna>=4.5,<5",
-    "pandas>=2.0,<2.3",
+    "pandas>=2.2,<2.3",
     "pydantic>=2.7,<3",
     "PyYAML>=6,<7",
     "requests>=2.31,<3",
@@ -26,7 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 serving = [
-    "kserve>=0.13,<1",
+    "kserve==0.17.0",
 ]
 dev = [
     "pytest>=8,<9",

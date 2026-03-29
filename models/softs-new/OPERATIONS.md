@@ -4,7 +4,7 @@
 
 | Key | Value |
 |-----|-------|
-| Python | `>=3.9` |
+| Python | `>=3.10` |
 | Entry point | `softs-new` |
 | Container image | `softs-new:latest` |
 | Base framework | PyTorch `>=2.4,<2.6` |

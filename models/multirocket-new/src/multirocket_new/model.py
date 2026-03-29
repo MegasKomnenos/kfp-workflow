@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 from aeon.regression import BaseRegressor
-from aeon.regression.convolution_based._hydra import _SparseScaler
-from aeon.transformations.collection.convolution_based import MultiRocketMultivariate
-from aeon.transformations.collection.convolution_based._hydra import HydraTransformer
+from aeon.transformations.collection.convolution_based import HydraTransformer, MultiRocket
 from sklearn.linear_model import RidgeCV
 from sklearn.preprocessing import StandardScaler
 from typing import Optional
@@ -93,6 +91,47 @@ def _activations_for_kernel(
     for index in range(n_cu):
         act[:, index, :] = _conv_batch(x[:, chan_idx[index], :], kernel_weights_2d[index], bias, dilation)
     return act
+
+
+class _HydraSparseScaler:
+    """Compatibility copy of aeon's Hydra sparse scaler."""
+
+    def __init__(self, mask: bool = True, exponent: int = 4):
+        self.mask = mask
+        self.exponent = exponent
+
+    def fit(self, x, y=None):
+        x = x.clamp(0).sqrt()
+        self.epsilon = (x == 0).float().mean(0) ** self.exponent + 1e-8
+        self.mu = x.mean(0)
+        self.sigma = x.std(0) + self.epsilon
+        return self
+
+    def transform(self, x, y=None):
+        x = x.clamp(0).sqrt()
+        if self.mask:
+            return ((x - self.mu) * (x != 0)) / self.sigma
+        return (x - self.mu) / self.sigma
+
+    def fit_transform(self, x, y=None):
+        self.fit(x, y=y)
+        return self.transform(x, y=y)
+
+
+def _to_numpy(values) -> np.ndarray:
+    if isinstance(values, np.ndarray):
+        return values
+    if hasattr(values, "detach"):
+        return values.detach().cpu().numpy()
+    if hasattr(values, "numpy"):
+        return values.numpy()
+    if hasattr(values, "to_numpy"):
+        return values.to_numpy()
+    if hasattr(values, "values"):
+        return np.asarray(values.values)
+    if hasattr(values, "toarray"):
+        return values.toarray()
+    return np.asarray(values)
 
 
 class SPRocketTransformer:
@@ -183,15 +222,15 @@ class MRHySPRegressor(BaseRegressor):
             random_state=self.random_state,
         )
         xt_hydra = self._hydra.fit_transform(x)
-        self._hydra_scaler = _SparseScaler()
-        xt_hydra = self._hydra_scaler.fit_transform(xt_hydra).numpy()
+        self._hydra_scaler = _HydraSparseScaler()
+        xt_hydra = _to_numpy(self._hydra_scaler.fit_transform(xt_hydra))
 
-        self._mr = MultiRocketMultivariate(
-            num_kernels=self.mr_num_kernels,
+        self._mr = MultiRocket(
+            n_kernels=self.mr_num_kernels,
             n_jobs=self.n_jobs,
             random_state=self.random_state,
         )
-        xt_mr = self._mr.fit_transform(x).values
+        xt_mr = _to_numpy(self._mr.fit_transform(x))
         self._mr_scaler = StandardScaler()
         xt_mr = self._mr_scaler.fit_transform(xt_mr)
 
@@ -207,7 +246,7 @@ class MRHySPRegressor(BaseRegressor):
         return self
 
     def _predict(self, x: np.ndarray) -> np.ndarray:
-        xt_hydra = self._hydra_scaler.transform(self._hydra.transform(x)).numpy()
-        xt_mr = self._mr_scaler.transform(self._mr.transform(x).values)
+        xt_hydra = _to_numpy(self._hydra_scaler.transform(self._hydra.transform(x)))
+        xt_mr = self._mr_scaler.transform(_to_numpy(self._mr.transform(x)))
         xt_sp = self._sp.transform(x)
         return self._ridge.predict(np.concatenate([xt_hydra, xt_mr, xt_sp], axis=1))

@@ -54,6 +54,7 @@ class StorageSpec(BaseModel):
     data_size: str = "32Gi"
     model_size: str = "32Gi"
     data_mount_path: str = "/mnt/data"
+    data_subpath: str = ""
     model_mount_path: str = "/mnt/models"
     seed_source_dir: str = ""
     skip_seed: bool = False
@@ -191,6 +192,34 @@ class ServingSpec(BaseModel):
     replicas: int = 1
     resources: ResourceSpec = Field(default_factory=ResourceSpec)
     serving_model_config: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_serving_contract(self) -> "ServingSpec":
+        effective_name = f"{self.metadata.name}-predictor-{self.namespace}"
+        if len(effective_name) > 63:
+            raise ValueError(
+                "metadata.name is too long for KServe RawDeployment. "
+                f"Effective host label '{effective_name}' has length {len(effective_name)} "
+                "but the limit is 63."
+            )
+
+        if self.runtime == "custom":
+            if not self.predictor_image:
+                raise ValueError(
+                    "predictor_image is required when runtime='custom'."
+                )
+
+            artifact_like_suffixes = {
+                ".pt", ".pth", ".joblib", ".pkl", ".pickle", ".onnx", ".bin",
+            }
+            suffix = Path(self.model_subpath).suffix.lower()
+            if suffix in artifact_like_suffixes:
+                raise ValueError(
+                    "model_subpath must point to a model directory for runtime='custom', "
+                    f"not a file-like path ending in '{suffix}'."
+                )
+
+        return self
 
 
 # ---------------------------------------------------------------------------

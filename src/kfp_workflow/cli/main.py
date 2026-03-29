@@ -6,7 +6,7 @@ import json
 import subprocess
 import warnings
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import typer
 
@@ -26,6 +26,109 @@ def _run_state_str(state: object) -> str:
     if state is None:
         return "UNKNOWN"
     return state.value if hasattr(state, "value") else str(state)
+
+
+def _validate_plugin_config_or_exit(spec_dict: dict) -> None:
+    """Abort CLI execution when plugin-specific config validation fails."""
+    from kfp_workflow.config_override import validate_plugin_config
+
+    errors = validate_plugin_config(spec_dict)
+    if not errors:
+        return
+
+    for error in errors:
+        typer.echo(f"Error: {error}", err=True)
+    raise typer.Exit(code=1)
+
+
+def _find_workflow_for_run(run_id: str, namespace: str) -> Optional[Dict[str, Any]]:
+    """Return the Argo Workflow object for a KFP run, if present."""
+    from kubernetes import client as k8s_client
+    from kubernetes import config as k8s_config
+
+    try:
+        k8s_config.load_kube_config()
+        api = k8s_client.CustomObjectsApi()
+        result = api.list_namespaced_custom_object(
+            group="argoproj.io",
+            version="v1alpha1",
+            namespace=namespace,
+            plural="workflows",
+            label_selector=f"pipeline/runid={run_id}",
+        )
+    except Exception:
+        return None
+    items = result.get("items", [])
+    if not items:
+        return None
+    items.sort(key=lambda item: item.get("metadata", {}).get("creationTimestamp", ""))
+    return items[-1]
+
+
+def _workflow_summary(workflow: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Normalize a workflow object for CLI output."""
+    if not workflow:
+        return None
+
+    status = workflow.get("status", {})
+    nodes = status.get("nodes", {}) or {}
+    pending = []
+    failed = []
+    for node in nodes.values():
+        phase = node.get("phase", "")
+        display = node.get("displayName") or node.get("name") or ""
+        if phase in {"Pending", "Running"} and display:
+            pending.append(display)
+        elif phase in {"Failed", "Error"} and display:
+            failed.append(display)
+
+    return {
+        "name": workflow.get("metadata", {}).get("name", ""),
+        "phase": status.get("phase", ""),
+        "progress": status.get("progress", ""),
+        "finished_at": status.get("finishedAt", ""),
+        "message": status.get("message", ""),
+        "pending_nodes": sorted(set(pending))[:10],
+        "failed_nodes": sorted(set(failed))[:10],
+    }
+
+
+def _augment_run_payload(run: Any, workflow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build the JSON payload returned by run-get and reused by wait."""
+    payload = {
+        "run_id": run.run_id,
+        "display_name": run.display_name,
+        "state": _run_state_str(run.state),
+        "created_at": str(run.created_at),
+        "finished_at": str(run.finished_at),
+        "experiment_id": run.experiment_id,
+        "error": str(run.error) if run.error else None,
+    }
+    workflow_summary = _workflow_summary(workflow)
+    if workflow_summary:
+        payload.update({
+            "workflow_name": workflow_summary["name"],
+            "workflow_phase": workflow_summary["phase"],
+            "workflow_progress": workflow_summary["progress"],
+            "workflow_finished_at": workflow_summary["finished_at"],
+            "workflow_message": workflow_summary["message"],
+            "pending_nodes": workflow_summary["pending_nodes"],
+            "failed_nodes": workflow_summary["failed_nodes"],
+        })
+    return payload
+
+
+def _log_for_pod(v1: Any, pod: Any, namespace: str) -> str:
+    """Read logs from a pod, preferring the main container when present."""
+    container_names = [c.name for c in (pod.spec.containers or [])]
+    container = "main" if "main" in container_names else (container_names[0] if container_names else None)
+    kwargs = {
+        "name": pod.metadata.name,
+        "namespace": namespace,
+    }
+    if container:
+        kwargs["container"] = container
+    return v1.read_namespaced_pod_log(**kwargs)
 
 # ---------------------------------------------------------------------------
 # App and sub-apps
@@ -93,15 +196,13 @@ def cmd_spec_validate(
 
     if spec_type == "pipeline":
         loaded = load_pipeline_spec_with_overrides(spec, set_values or None)
-        if set_values:
-            from kfp_workflow.config_override import validate_plugin_config
-            for w in validate_plugin_config(loaded.model_dump()):
-                typer.echo(f"Warning: {w}", err=True)
+        _validate_plugin_config_or_exit(loaded.model_dump())
     elif spec_type == "serving":
         loaded = load_serving_spec(spec)
     elif spec_type == "tune":
         from kfp_workflow.specs import load_tune_spec_with_overrides
         loaded = load_tune_spec_with_overrides(spec, set_values or None)
+        _validate_plugin_config_or_exit(loaded.model_dump())
     else:
         typer.echo(f"Unknown spec type: {spec_type}", err=True)
         raise typer.Exit(code=1)
@@ -128,6 +229,7 @@ def cmd_pipeline_compile(
     from kfp_workflow.specs import load_pipeline_spec_with_overrides
 
     loaded = load_pipeline_spec_with_overrides(spec, set_values or None)
+    _validate_plugin_config_or_exit(loaded.model_dump())
     result = compile_pipeline(loaded, output)
     typer.echo(f"Pipeline compiled to {result}")
 
@@ -150,6 +252,7 @@ def cmd_pipeline_submit(
     from kfp_workflow.specs import load_pipeline_spec_with_overrides
 
     loaded = load_pipeline_spec_with_overrides(spec, set_values or None)
+    _validate_plugin_config_or_exit(loaded.model_dump())
     run_id = submit_pipeline(
         loaded,
         namespace=namespace,
@@ -191,17 +294,11 @@ def cmd_run_get(
         run = client.get_run(run_id=run_id)
 
     state = _run_state_str(run.state)
+    workflow = _find_workflow_for_run(run_id=run_id, namespace=namespace)
+    payload = _augment_run_payload(run, workflow)
 
     if _json_output:
-        print_json({
-            "run_id": run.run_id,
-            "display_name": run.display_name,
-            "state": state,
-            "created_at": str(run.created_at),
-            "finished_at": str(run.finished_at),
-            "experiment_id": run.experiment_id,
-            "error": str(run.error) if run.error else None,
-        })
+        print_json(payload)
         return
 
     pairs = [
@@ -212,6 +309,19 @@ def cmd_run_get(
         ("Finished", str(run.finished_at or "")),
         ("Experiment ID", run.experiment_id or ""),
     ]
+    workflow_summary = _workflow_summary(workflow)
+    if workflow_summary:
+        pairs.extend([
+            ("Workflow", workflow_summary["name"]),
+            ("Workflow Phase", workflow_summary["phase"] or "(unknown)"),
+            ("Workflow Progress", workflow_summary["progress"] or "(unknown)"),
+        ])
+        if workflow_summary["message"]:
+            pairs.append(("Workflow Message", workflow_summary["message"]))
+        if workflow_summary["pending_nodes"]:
+            pairs.append(("Pending Nodes", ", ".join(workflow_summary["pending_nodes"])))
+        if workflow_summary["failed_nodes"]:
+            pairs.append(("Failed Nodes", ", ".join(workflow_summary["failed_nodes"])))
     if run.error:
         pairs.append(("Error", str(run.error)))
     print_kv(pairs)
@@ -302,15 +412,59 @@ def cmd_run_wait(
     from kfp_workflow.cli.output import console, style_run_state
     from kfp_workflow.pipeline.connection import kfp_connection
 
-    with kfp_connection(
-        namespace=namespace, host=host, user=user,
-        existing_token=existing_token, cookies=cookies,
-    ) as client:
-        with console.status(f"Waiting for run {run_id[:8]}..."):
-            run = client.wait_for_run_completion(run_id, timeout=timeout)
+    try:
+        with kfp_connection(
+            namespace=namespace, host=host, user=user,
+            existing_token=existing_token, cookies=cookies,
+        ) as client:
+            with console.status(f"Waiting for run {run_id[:8]}..."):
+                run = client.wait_for_run_completion(run_id, timeout=timeout)
+    except TimeoutError:
+        workflow_summary = _workflow_summary(
+            _find_workflow_for_run(run_id=run_id, namespace=namespace)
+        )
+        console.print(
+            f"Run {run_id[:8]} did not reach a terminal KFP state within {timeout}s.",
+            style="yellow",
+        )
+        if workflow_summary:
+            console.print(
+                "Workflow: "
+                f"{workflow_summary['name']} "
+                f"phase={workflow_summary['phase'] or 'Unknown'} "
+                f"progress={workflow_summary['progress'] or 'Unknown'}"
+            )
+            if workflow_summary["message"]:
+                console.print(f"Workflow message: {workflow_summary['message']}")
+            if workflow_summary["pending_nodes"]:
+                console.print(
+                    "Pending nodes: " + ", ".join(workflow_summary["pending_nodes"])
+                )
+            if workflow_summary["failed_nodes"]:
+                console.print(
+                    "Failed nodes: " + ", ".join(workflow_summary["failed_nodes"]),
+                    style="red",
+                )
+        raise typer.Exit(code=1)
 
     state = _run_state_str(run.state)
     console.print(f"Run {run_id[:8]} finished: {style_run_state(state)}")
+
+    workflow_summary = _workflow_summary(
+        _find_workflow_for_run(run_id=run_id, namespace=namespace)
+    )
+    if workflow_summary and workflow_summary["phase"]:
+        console.print(
+            "Workflow: "
+            f"{workflow_summary['name']} "
+            f"phase={workflow_summary['phase']} "
+            f"progress={workflow_summary['progress'] or '(unknown)'}"
+        )
+        if workflow_summary["failed_nodes"]:
+            console.print(
+                "Failed nodes: " + ", ".join(workflow_summary["failed_nodes"]),
+                style="red",
+            )
 
     if state in ("FAILED", "CANCELED"):
         if run.error:
@@ -378,18 +532,48 @@ def cmd_run_logs(
     if step:
         impl_pods = [p for p in impl_pods if step in p.metadata.name]
 
-    if not impl_pods:
-        typer.echo("No matching pods found.", err=True)
+    pods_to_show = impl_pods
+    if not pods_to_show:
+        driver_pods = [
+            p for p in pods.items
+            if "driver" in p.metadata.name
+        ]
+        if step:
+            driver_pods = [p for p in driver_pods if step in p.metadata.name]
+        pods_to_show = driver_pods
+
+    if not pods_to_show:
+        workflow_summary = _workflow_summary(
+            _find_workflow_for_run(run_id=run_id, namespace=namespace)
+        )
+        if workflow_summary:
+            typer.echo(
+                "No matching pods found. "
+                f"Workflow {workflow_summary['name']} "
+                f"is {workflow_summary['phase'] or 'Unknown'} "
+                f"with progress {workflow_summary['progress'] or 'Unknown'}.",
+                err=True,
+            )
+            if workflow_summary["message"]:
+                typer.echo(f"Workflow message: {workflow_summary['message']}", err=True)
+            if workflow_summary["pending_nodes"]:
+                typer.echo(
+                    "Pending nodes: " + ", ".join(workflow_summary["pending_nodes"]),
+                    err=True,
+                )
+            if workflow_summary["failed_nodes"]:
+                typer.echo(
+                    "Failed nodes: " + ", ".join(workflow_summary["failed_nodes"]),
+                    err=True,
+                )
+        else:
+            typer.echo("No matching pods found.", err=True)
         raise typer.Exit(code=1)
 
-    for pod in sorted(impl_pods, key=lambda p: p.metadata.name):
+    for pod in sorted(pods_to_show, key=lambda p: p.metadata.name):
         console.rule(f"[bold]{pod.metadata.name}[/bold]")
         try:
-            log = v1.read_namespaced_pod_log(
-                name=pod.metadata.name,
-                namespace=namespace,
-                container="main",
-            )
+            log = _log_for_pod(v1=v1, pod=pod, namespace=namespace)
             typer.echo(log)
         except k8s_client.ApiException as exc:
             typer.echo(f"  (error reading logs: {exc.reason})", err=True)
@@ -460,13 +644,15 @@ def cmd_experiment_list(
 def cmd_serve_create(
     spec: Path = typer.Option(..., help="Path to a serving YAML spec."),
     dry_run: bool = typer.Option(False, help="Print manifest without applying."),
+    wait: bool = typer.Option(False, help="Wait for Ready=True after apply."),
+    timeout: int = typer.Option(300, help="Wait timeout in seconds."),
 ) -> None:
     """Create a KServe InferenceService from a serving spec."""
-    from kfp_workflow.serving.kserve import create_inference_service
+    from kfp_workflow.serving import kserve
     from kfp_workflow.specs import load_serving_spec
 
     loaded = load_serving_spec(spec)
-    result = create_inference_service(
+    result = kserve.create_inference_service(
         name=loaded.metadata.name,
         namespace=loaded.namespace,
         model_pvc_name=loaded.model_pvc,
@@ -480,6 +666,27 @@ def cmd_serve_create(
     )
     typer.echo(json.dumps(result, indent=2))
 
+    if wait and not dry_run:
+        diagnostics = kserve.wait_for_inference_service_ready(
+            name=loaded.metadata.name,
+            namespace=loaded.namespace,
+            timeout=timeout,
+        )
+        typer.echo(
+            json.dumps(
+                {
+                    "name": loaded.metadata.name,
+                    "namespace": loaded.namespace,
+                    "ready": diagnostics["ready"],
+                    "conditions": diagnostics["conditions"],
+                    "events": diagnostics["events"],
+                },
+                indent=2,
+            )
+        )
+        if diagnostics["ready"] != "True":
+            raise typer.Exit(code=1)
+
 
 @serve_app.command("delete")
 def cmd_serve_delete(
@@ -489,9 +696,9 @@ def cmd_serve_delete(
     ),
 ) -> None:
     """Delete a KServe InferenceService."""
-    from kfp_workflow.serving.kserve import delete_inference_service
+    from kfp_workflow.serving import kserve
 
-    delete_inference_service(name=name, namespace=namespace)
+    kserve.delete_inference_service(name=name, namespace=namespace)
     typer.echo(f"InferenceService '{name}' deleted.")
 
 
@@ -507,9 +714,9 @@ def cmd_serve_list(
         print_table,
         style_isvc_ready,
     )
-    from kfp_workflow.serving.kserve import list_inference_services
+    from kfp_workflow.serving import kserve
 
-    items = list_inference_services(namespace=namespace)
+    items = kserve.list_inference_services(namespace=namespace)
 
     if _json_output:
         print_json([{
@@ -543,14 +750,18 @@ def cmd_serve_get(
 ) -> None:
     """Get detailed status of a KServe InferenceService."""
     from kfp_workflow.cli.output import print_json, print_kv, style_isvc_ready
-    from kfp_workflow.serving.kserve import get_inference_service
+    from kfp_workflow.serving import kserve
 
-    svc = get_inference_service(name=name, namespace=namespace)
-
-    ready = _isvc_ready(svc)
+    diagnostics = kserve.get_inference_service_diagnostics(
+        name=name,
+        namespace=namespace,
+    )
+    svc = diagnostics["service"]
+    ready = diagnostics["ready"]
     url = svc.get("status", {}).get("url", "")
     created = svc["metadata"].get("creationTimestamp", "")
-    conditions = svc.get("status", {}).get("conditions", [])
+    conditions = diagnostics["conditions"]
+    events = diagnostics["events"]
 
     if _json_output:
         print_json({
@@ -560,6 +771,7 @@ def cmd_serve_get(
             "url": url,
             "created": created,
             "conditions": conditions,
+            "events": events,
         })
         return
 
@@ -573,7 +785,17 @@ def cmd_serve_get(
     for cond in conditions:
         ctype = cond.get("type", "")
         cstatus = cond.get("status", "")
-        pairs.append((f"  {ctype}", cstatus))
+        detail = cstatus
+        if cond.get("reason"):
+            detail += f" ({cond['reason']})"
+        if cond.get("message"):
+            detail += f" - {cond['message']}"
+        pairs.append((f"  {ctype}", detail))
+    for idx, event in enumerate(events, start=1):
+        detail = event.get("reason", "") or "(event)"
+        if event.get("message"):
+            detail += f" - {event['message']}"
+        pairs.append((f"  Warning {idx}", detail))
 
     print_kv(pairs)
 
@@ -824,6 +1046,7 @@ def cmd_tune_run(
     from kfp_workflow.tune.engine import run_hpo
 
     loaded = load_tune_spec_with_overrides(spec, set_values or None)
+    _validate_plugin_config_or_exit(loaded.model_dump())
     plugin = get_plugin(loaded.model.name)
     mount = data_mount_path or loaded.storage.data_mount_path
 
@@ -873,6 +1096,7 @@ def cmd_tune_katib(
     from kfp_workflow.tune.katib import build_katib_experiment
 
     loaded = load_tune_spec_with_overrides(spec, set_values or None)
+    _validate_plugin_config_or_exit(loaded.model_dump())
     plugin = get_plugin(loaded.model.name)
     search_space = resolve_search_space(plugin, loaded.model_dump())
 
@@ -929,6 +1153,7 @@ def cmd_tune_show_space(
     from kfp_workflow.tune.engine import resolve_search_space
 
     loaded = load_tune_spec_with_overrides(spec, set_values or None)
+    _validate_plugin_config_or_exit(loaded.model_dump())
     plugin = get_plugin(loaded.model.name)
     space = resolve_search_space(plugin, loaded.model_dump())
 

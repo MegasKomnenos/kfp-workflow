@@ -1,0 +1,75 @@
+metadata:
+  name: mambasl-new-fd001-smoke
+  description: Minimal FD001 smoke workflow
+runtime:
+  namespace: kubeflow-user-example-com
+  pipeline_root: s3://mlpipeline/mambasl-new/fd001-smoke
+  image: mambasl-new:latest
+  image_pull_policy: IfNotPresent
+  service_account: default-editor
+  use_gpu: false
+  torch_num_threads: 2
+  resources:
+    cpu_request: "2"
+    cpu_limit: "2"
+    memory_request: 8Gi
+    memory_limit: 8Gi
+    gpu_request: "0"
+    gpu_limit: "0"
+storage:
+  mode: download
+  data_pvc: cmapss-data
+  results_pvc: cmapss-results
+  storage_class: local-path
+  data_size: 8Gi
+  results_size: 32Gi
+  data_mount_path: /mnt/data
+  results_mount_path: /mnt/results
+data:
+  data_root: data/cmapss
+  download_policy: if_missing
+datasets:
+  items: [FD001]
+stages: [final_train_eval, aggregate_reports]
+train_defaults:
+  seed: 42
+  feature_mode: settings_plus_sensors
+  norm_mode: condition_minmax
+  selection_metric: rmse
+  score_weight: 0.01
+  val_mode: all_windows
+  hpo_max_epochs: 2
+  hpo_patience: 1
+  final_max_epochs: 2
+  final_patience: 1
+  fixed_params:
+    d_model: 32
+    d_state: 8
+    d_conv: 3
+    expand: 1
+    num_kernels: 3
+    tv_dt: true
+    tv_B: true
+    tv_C: true
+    use_D: true
+    projection: last
+    dropout: 0.1
+    batch_size: 64
+    lr: 0.001
+    weight_decay: 0.0001
+    huber_delta: 1.0
+    window_size: 30
+    max_rul: 125.0
+hpo:
+  enabled: false
+  builtin_profile: default
+  algorithm: random
+  max_trial_count: 1
+  parallel_trial_count: 1
+  max_failed_trial_count: 1
+ablations:
+  enabled: false
+  axes: {}
+outputs:
+  local_results_dir: results
+  retain_model_state: false

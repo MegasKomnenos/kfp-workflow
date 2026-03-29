@@ -21,7 +21,7 @@
 
 ## 사전 요구사항
 
-- Python >= 3.9
+- Python >= 3.10
 - Kubernetes 클러스터 (Kubeflow Pipelines v2 + KServe 설치됨)
 - Docker (이미지 빌드용)
 - kubectl CLI 설치 및 클러스터 접근 설정

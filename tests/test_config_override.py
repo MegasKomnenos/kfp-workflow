@@ -1,6 +1,7 @@
 """Tests for CLI config override system (--set flag)."""
 
 import pytest
+from typer.testing import CliRunner
 
 from kfp_workflow.config_override import (
     apply_overrides,
@@ -8,6 +9,7 @@ from kfp_workflow.config_override import (
     set_nested,
     validate_plugin_config,
 )
+from kfp_workflow.cli.main import app
 
 
 # ---------------------------------------------------------------------------
@@ -253,11 +255,68 @@ class TestCLISetFlag:
 
     def test_submit_has_set_option(self):
         from typer.testing import CliRunner
-        from kfp_workflow.cli.main import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["pipeline", "submit", "--help"])
         assert "--set" in result.output
+
+
+class TestCLIPluginValidation:
+    def test_spec_validate_fails_on_plugin_config_error(self, tmp_path):
+        spec_yaml = tmp_path / "spec.yaml"
+        spec_yaml.write_text("""\
+metadata:
+  name: test-pipeline
+runtime:
+  namespace: test-ns
+  host: http://localhost:8888
+model:
+  name: mambasl-cmapss
+dataset:
+  name: cmapss
+  config:
+    fd_name: [FD001]
+""")
+        runner = CliRunner()
+
+        result = runner.invoke(app, ["spec", "validate", "--spec", str(spec_yaml)])
+
+        assert result.exit_code == 1
+        assert "dataset.config validation" in result.output
+
+    def test_pipeline_compile_fails_on_plugin_config_error(self, tmp_path):
+        spec_yaml = tmp_path / "spec.yaml"
+        spec_yaml.write_text("""\
+metadata:
+  name: test-pipeline
+runtime:
+  namespace: test-ns
+  host: http://localhost:8888
+model:
+  name: mambasl-cmapss
+  config:
+    d_model: not_an_int
+dataset:
+  name: cmapss
+""")
+        runner = CliRunner()
+        output_yaml = tmp_path / "compiled.yaml"
+
+        result = runner.invoke(
+            app,
+            [
+                "pipeline",
+                "compile",
+                "--spec",
+                str(spec_yaml),
+                "--output",
+                str(output_yaml),
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "model.config validation" in result.output
+        assert not output_yaml.exists()
 
     def test_validate_has_set_option(self):
         from typer.testing import CliRunner
