@@ -64,3 +64,56 @@ class PVCDatasetRegistry(DatasetRegistryBase):
     def list_datasets(self) -> List[DatasetInfo]:
         data = self._load()
         return [DatasetInfo.model_validate(d) for d in data["datasets"]]
+
+
+def resolve_data_mount_path(spec: dict) -> str:
+    """Resolve the effective dataset path from a pipeline storage spec.
+
+    Checks explicit ``data_subpath`` first, then the PVC dataset registry,
+    then falls back to the bare mount path.
+
+    Parameters
+    ----------
+    spec:
+        Pipeline spec dict with ``storage`` and ``dataset`` sections.
+
+    Returns
+    -------
+    str
+        Absolute path to the dataset directory on the mounted PVC.
+
+    Raises
+    ------
+    ValueError
+        If the registry entry references a different PVC than the one mounted.
+    """
+    storage = spec.get("storage", {})
+    base_mount = Path(storage["data_mount_path"])
+    explicit_subpath = str(storage.get("data_subpath", "") or "").strip("/")
+    if explicit_subpath:
+        return str(base_mount / explicit_subpath)
+
+    registry_path = base_mount / ".dataset_registry.json"
+    if not registry_path.exists():
+        return str(base_mount)
+
+    registry = PVCDatasetRegistry(registry_path=str(registry_path))
+    dataset_ref = spec.get("dataset", {})
+    try:
+        info = registry.get_dataset(
+            name=dataset_ref.get("name", ""),
+            version=dataset_ref.get("version"),
+        )
+    except KeyError:
+        return str(base_mount)
+
+    expected_pvc = storage.get("data_pvc", "")
+    if info.pvc_name != expected_pvc:
+        raise ValueError(
+            "Dataset registry entry points to PVC "
+            f"'{info.pvc_name}', but the pipeline mounts "
+            f"'{expected_pvc}'. Cross-PVC dataset resolution is not "
+            "supported by this pipeline path."
+        )
+
+    return str(base_mount / info.subpath.strip("/"))

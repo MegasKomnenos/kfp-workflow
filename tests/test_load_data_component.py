@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from kfp_workflow.components.load_data import _resolve_data_mount_path_from_spec
+from kfp_workflow.registry.dataset_registry import resolve_data_mount_path as _resolve_data_mount_path_from_spec
 
 
 def _base_spec(tmp_path: Path) -> dict:
