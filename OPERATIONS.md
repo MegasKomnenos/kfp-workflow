@@ -111,13 +111,24 @@ kfp-workflow tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
 kfp-workflow tune katib --spec configs/tuning/mambasl_cmapss_tune.yaml --dry-run
 kfp-workflow tune katib --spec configs/tuning/softs_cmapss_tune.yaml --dry-run
 
+# Bootstrap tune result storage before Katib
+kfp-workflow cluster bootstrap \
+  --type tune \
+  --spec configs/tuning/mambasl_cmapss_tune.yaml
+
 # Submit Katib experiment to cluster
 kfp-workflow tune katib --spec configs/tuning/mambasl_cmapss_tune.yaml
 kfp-workflow tune katib --spec configs/tuning/softs_cmapss_tune.yaml
 
+# Inspect and download persisted Katib results
+kfp-workflow tune list
+kfp-workflow tune get mambasl-cmapss-hpo
+kfp-workflow tune download mambasl-cmapss-hpo
+
 # Katib trial pods run the internal shared executor:
 # kfp-workflow tune trial --spec-json ... --trial-params-json ...
 # Objective metrics must be printed to stdout as objective=<value>.
+# Trial payloads and the aggregated results.json are stored on storage.results_pvc.
 
 # JSON output for scripting
 kfp-workflow --json tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \

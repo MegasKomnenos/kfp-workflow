@@ -129,7 +129,9 @@ test/
 │   │   ├── __init__.py
 │   │   ├── exceptions.py              # TrialPruned exception (project-level, no Optuna leak)
 │   │   ├── engine.py                  # Optuna HPO engine (study, trial loop, suggest)
-│   │   └── katib.py                   # Katib Experiment CRD manifest builder with shared trial-pod command wiring
+│   │   ├── history.py                 # Katib experiment discovery and persisted tune result retrieval helpers
+│   │   ├── katib.py                   # Katib Experiment CRD manifest builder with shared trial-pod command wiring
+│   │   └── results.py                 # Tune result path/payload builders for per-trial and aggregated JSON artifacts
 │   ├── registry/
 │   │   ├── base.py                    # ABCs: ModelRegistryBase, DatasetRegistryBase
 │   │   ├── model_registry.py          # FileModelRegistry (JSON on PVC)
@@ -152,5 +154,6 @@ test/
     ├── test_registry.py               # File-backed registry CRUD tests
     ├── test_plugin_system.py          # Plugin ABC, registry, _build_cfg tests
     ├── test_spec_validate_cli.py      # Spec validate JSON/output/override regression tests
+    ├── test_tune_history.py           # Tune experiment history, CLI, and bootstrap regression tests
     └── test_tune_katib.py             # Katib manifest + shared trial-runner regression tests
 ```

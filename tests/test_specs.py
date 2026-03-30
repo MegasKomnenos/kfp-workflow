@@ -8,6 +8,7 @@ from kfp_workflow.specs import (
     BenchmarkSpec,
     PipelineSpec,
     ServingSpec,
+    TuneSpec,
     load_benchmark_spec,
     load_pipeline_spec,
     load_serving_spec,
@@ -87,6 +88,17 @@ def test_benchmark_spec_defaults():
     )
     assert spec.storage.results_pvc == "benchmark-store"
     assert spec.model.predictor_image == "kfp-workflow:latest"
+
+
+def test_tune_spec_defaults():
+    spec = TuneSpec(
+        metadata={"name": "tune"},
+        runtime={"namespace": "default"},
+        model={"name": "m"},
+        dataset={"name": "d"},
+    )
+    assert spec.storage.results_pvc == "tune-store"
+    assert spec.storage.results_mount_path == "/mnt/tune-results"
 
 
 def test_pipeline_spec_rejects_missing_fields():

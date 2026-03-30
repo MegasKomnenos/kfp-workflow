@@ -87,10 +87,13 @@ kfp-workflow registry dataset list      [--registry-path]
 # Hyperparameter tuning
 kfp-workflow tune run            --spec <path> [--set key=value ...] [--data-mount-path] [--output]
 kfp-workflow tune katib          --spec <path> [--set key=value ...] [--dry-run] [--output]
+kfp-workflow tune list           [--namespace]
+kfp-workflow tune get            <experiment_name> [--namespace]
+kfp-workflow tune download       <experiment_name> [--output <path>] [--namespace]
 kfp-workflow tune show-space     --spec <path> [--set key=value ...]
 
 # Infrastructure
-kfp-workflow cluster bootstrap  --spec <path> [--type {pipeline,benchmark}] [--dry-run]
+kfp-workflow cluster bootstrap  --spec <path> [--type {pipeline,benchmark,tune}] [--dry-run]
 kfp-workflow spec validate      --spec <path> [--type {pipeline,serving,tune,benchmark}] [--set key=value ...]
 ```
 
@@ -211,6 +214,8 @@ The project owns the HPO orchestration engine (Optuna-based). Plugins provide se
 - `hpo.max_trials` — Maximum number of trials
 - `hpo.builtin_profile` — `default` or `aggressive` (plugin-provided search spaces)
 - `hpo.search_space` — Custom search space (overrides builtin profile)
+- `storage.results_pvc` — Dedicated PVC for Katib trial payloads and aggregated `results.json`
+- `storage.results_mount_path` — Mount path used by Katib trials for persisted tune artifacts
 
 ```bash
 # Preview the resolved search space
@@ -222,9 +227,16 @@ kfp-workflow tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
 
 # Generate Katib manifest for distributed HPO
 kfp-workflow tune katib --spec configs/tuning/mambasl_cmapss_tune.yaml --dry-run
+
+# Prepare tune storage and inspect persisted Katib results
+kfp-workflow cluster bootstrap --type tune \
+  --spec configs/tuning/mambasl_cmapss_tune.yaml
+kfp-workflow tune list
+kfp-workflow tune get mambasl-cmapss-hpo
+kfp-workflow tune download mambasl-cmapss-hpo
 ```
 
-`kfp-workflow tune katib` renders a Katib `Experiment` whose trial Job mounts the workflow PVCs, calls the hidden shared `tune trial` entrypoint, and reports the objective through Katib's `StdOut` collector.
+`kfp-workflow tune katib` renders a Katib `Experiment` whose trial Job mounts the workflow PVCs plus the dedicated tune results PVC, calls the hidden shared `tune trial` entrypoint, reports the objective through Katib's `StdOut` collector, and persists per-trial JSON artifacts under `tune-results/<tune-name>/<experiment-name>/trials/`. `tune get` and `tune download` lazily aggregate those trial artifacts into the canonical in-cluster `results.json`.
 
 Values are auto-coerced: `128` → int, `0.001` → float, `true`/`false` → bool, `[1,2,3]` → list.
 

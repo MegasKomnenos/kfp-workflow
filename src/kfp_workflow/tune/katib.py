@@ -116,6 +116,16 @@ def build_katib_experiment(
                 "name": "workflow-models",
                 "mountPath": spec.storage.model_mount_path,
             },
+            {
+                "name": "workflow-results",
+                "mountPath": spec.storage.results_mount_path,
+            },
+        ],
+        "env": [
+            {
+                "name": "KFP_WORKFLOW_TUNE_TRIAL_NAME",
+                "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}},
+            },
         ],
     }
     if spec.runtime.use_gpu:
@@ -132,7 +142,14 @@ def build_katib_experiment(
         "metadata": {
             "name": spec.metadata.name,
             "namespace": spec.runtime.namespace,
-            "annotations": {"sidecar.istio.io/inject": "false"},
+            "labels": {
+                "app.kubernetes.io/managed-by": "kfp-workflow",
+                "kfp-workflow/type": "tune",
+            },
+            "annotations": {
+                "sidecar.istio.io/inject": "false",
+                "kfp-workflow/spec-json": spec.model_dump_json(),
+            },
         },
         "spec": {
             "resumePolicy": "Never",
@@ -187,6 +204,12 @@ def build_katib_experiment(
                                         "name": "workflow-models",
                                         "persistentVolumeClaim": {
                                             "claimName": spec.storage.model_pvc,
+                                        },
+                                    },
+                                    {
+                                        "name": "workflow-results",
+                                        "persistentVolumeClaim": {
+                                            "claimName": spec.storage.results_pvc,
                                         },
                                     },
                                 ],

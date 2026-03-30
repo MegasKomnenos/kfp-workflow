@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from kfp_workflow.cli.main import app
@@ -88,11 +89,16 @@ def test_build_katib_experiment_references_trial_parameters():
     assert manifest["spec"]["metricsCollectorSpec"] == {"collector": {"kind": "StdOut"}}
     assert manifest["spec"]["trialTemplate"]["successCondition"] == 'status.conditions.#(type=="Complete")#'
     assert manifest["metadata"]["annotations"]["sidecar.istio.io/inject"] == "false"
+    assert manifest["metadata"]["labels"]["kfp-workflow/type"] == "tune"
+    assert "kfp-workflow/spec-json" in manifest["metadata"]["annotations"]
     assert json.loads(params_json) == {
         "d_model": "${trialParameters.d_model}",
         "lr": "${trialParameters.lr}",
     }
     assert container["volumeMounts"][0]["mountPath"] == "/mnt/data"
+    assert container["volumeMounts"][2]["mountPath"] == "/mnt/tune-results"
+    assert container["env"][0]["name"] == "KFP_WORKFLOW_TUNE_TRIAL_NAME"
+    assert manifest["spec"]["trialTemplate"]["trialSpec"]["spec"]["template"]["spec"]["volumes"][2]["persistentVolumeClaim"]["claimName"] == "tune-store"
     assert "nvidia.com/gpu" not in container["resources"]["requests"]
 
 
@@ -143,3 +149,48 @@ def test_tune_trial_coerces_katib_params_and_emits_objective(monkeypatch):
         "dropout": 0.25,
     }
     assert captured["data_mount_path"] == "/mnt/data"
+
+
+def test_tune_trial_persists_result_payload(tmp_path, monkeypatch):
+    class DummyPlugin:
+        def hpo_base_config(self, spec):
+            return {"base_only": 1}
+
+        def hpo_objective(self, spec, params, data_mount_path):
+            assert spec["storage"]["results_mount_path"] == str(tmp_path)
+            assert data_mount_path == "/mnt/data"
+            return 2.5
+
+    monkeypatch.setattr("kfp_workflow.cli.main._validate_plugin_config_or_exit", lambda spec_dict: None)
+    monkeypatch.setattr("kfp_workflow.plugins.get_plugin", lambda model_name: DummyPlugin())
+
+    spec = _sample_tune_spec()
+    result = runner.invoke(
+        app,
+        [
+            "tune",
+            "trial",
+            "--spec-json",
+            spec.model_dump_json(),
+            "--trial-params-json",
+            json.dumps({"width": "7"}),
+            "--data-mount-path",
+            "/mnt/data",
+            "--experiment-name",
+            "mambasl-cmapss-hpo",
+            "--namespace",
+            "kubeflow-user-example-com",
+            "--results-mount-path",
+            str(tmp_path),
+            "--trial-name",
+            "trial-7",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(
+        (tmp_path / "tune-results" / "mambasl-cmapss-hpo" / "mambasl-cmapss-hpo" / "trials" / "trial-7.json").read_text()
+    )
+    assert payload["status"] == "completed"
+    assert payload["objective_value"] == pytest.approx(2.5)
+    assert payload["params"]["base_only"] == 1

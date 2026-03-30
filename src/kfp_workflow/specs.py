@@ -74,6 +74,14 @@ class BenchmarkStorageSpec(StorageSpec):
     results_mount_path: str = "/mnt/benchmarks"
 
 
+class TuneStorageSpec(StorageSpec):
+    """PVC-backed storage for tune inputs, models, and result payloads."""
+
+    results_pvc: str = "tune-store"
+    results_size: str = "32Gi"
+    results_mount_path: str = "/mnt/tune-results"
+
+
 # ---------------------------------------------------------------------------
 # Training pipeline spec
 # ---------------------------------------------------------------------------
@@ -159,7 +167,7 @@ class TuneSpec(SpecModel):
 
     metadata: MetadataSpec
     runtime: RuntimeSpec
-    storage: StorageSpec = Field(default_factory=StorageSpec)
+    storage: TuneStorageSpec = Field(default_factory=TuneStorageSpec)
     model: ModelRef
     dataset: DatasetRef
     train: TrainSpec = Field(default_factory=TrainSpec)

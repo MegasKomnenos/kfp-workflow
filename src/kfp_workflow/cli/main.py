@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import warnings
 from pathlib import Path
@@ -1422,18 +1423,20 @@ def cmd_cluster_bootstrap(
     spec_type: str = typer.Option(
         "pipeline",
         "--type",
-        help="Spec type: 'pipeline' or 'benchmark'.",
+        help="Spec type: 'pipeline', 'benchmark', or 'tune'.",
     ),
     dry_run: bool = typer.Option(False, help="Print manifests without applying."),
 ) -> None:
     """Create PVCs for data and model storage."""
     from kfp_workflow.benchmark.materialize import load_materialized_benchmark_spec
-    from kfp_workflow.specs import load_pipeline_spec
+    from kfp_workflow.specs import load_pipeline_spec, load_tune_spec
 
     if spec_type == "pipeline":
         loaded = load_pipeline_spec(spec)
     elif spec_type == "benchmark":
         loaded, _ = load_materialized_benchmark_spec(spec)
+    elif spec_type == "tune":
+        loaded = load_tune_spec(spec)
     else:
         typer.echo(f"Unknown spec type: {spec_type}", err=True)
         raise typer.Exit(code=1)
@@ -1516,6 +1519,191 @@ def cmd_cluster_bootstrap(
 # tune commands
 # ---------------------------------------------------------------------------
 
+@tune_app.command("list")
+def cmd_tune_list(
+    namespace: str = typer.Option(
+        "kubeflow-user-example-com", help="Kubernetes namespace.",
+    ),
+) -> None:
+    """List managed Katib tune experiments."""
+    from kfp_workflow.cli.output import print_json, print_table, style_run_state
+    from kfp_workflow.tune.history import (
+        extract_tune_spec,
+        is_tune_experiment,
+        list_tune_experiments,
+        summarize_experiment,
+    )
+
+    items = []
+    for experiment in list_tune_experiments(namespace):
+        if not is_tune_experiment(experiment):
+            continue
+        summary = summarize_experiment(experiment)
+        tune_spec = extract_tune_spec(experiment) or {}
+        summary["tune_name"] = tune_spec.get("metadata", {}).get(
+            "name",
+            summary["experiment_name"],
+        )
+        items.append(summary)
+
+    if _json_output:
+        print_json(items)
+        return
+
+    rows = []
+    for item in items:
+        best = ""
+        if item.get("best_value") is not None:
+            best = f"{float(item['best_value']):.4f}"
+        rows.append((
+            item["experiment_name"] or "",
+            style_run_state(item["state"] or "UNKNOWN"),
+            best,
+            f"{item.get('n_completed', 0)}/{item.get('n_trials', 0)}",
+            item.get("created_at", "") or "",
+            item.get("finished_at", "") or "",
+        ))
+    print_table(
+        title="Tune Experiments",
+        columns=["NAME", "STATE", "BEST", "TRIALS", "CREATED", "FINISHED"],
+        rows=rows,
+    )
+
+
+@tune_app.command("get")
+def cmd_tune_get(
+    experiment_name: str = typer.Argument(..., help="Katib experiment name."),
+    namespace: str = typer.Option(
+        "kubeflow-user-example-com", help="Kubernetes namespace.",
+    ),
+) -> None:
+    """Show detailed info for a managed Katib tune experiment."""
+    from kfp_workflow.cli.output import print_json, print_kv, style_run_state
+    from kfp_workflow.tune.history import (
+        extract_tune_spec,
+        get_tune_experiment,
+        is_tune_experiment,
+        resolve_results,
+        summarize_experiment,
+    )
+
+    experiment = get_tune_experiment(experiment_name, namespace)
+    if not experiment:
+        typer.echo(f"Tune experiment '{experiment_name}' was not found.", err=True)
+        raise typer.Exit(code=1)
+    if not is_tune_experiment(experiment):
+        typer.echo(f"Experiment '{experiment_name}' is not a managed tune experiment.", err=True)
+        raise typer.Exit(code=1)
+
+    tune_spec = extract_tune_spec(experiment) or {}
+    summary = summarize_experiment(experiment)
+    payload = {
+        "experiment_name": summary["experiment_name"],
+        "tune_name": tune_spec.get("metadata", {}).get("name", summary["experiment_name"]),
+        "namespace": namespace,
+        "state": summary["state"],
+        "created_at": summary["created_at"],
+        "finished_at": summary["finished_at"],
+        "best_value": summary.get("best_value"),
+        "best_params": summary.get("best_params", {}),
+        "n_trials": summary.get("n_trials"),
+        "n_completed": summary.get("n_completed"),
+        "n_pruned": summary.get("n_pruned"),
+        "n_failed": summary.get("n_failed"),
+    }
+
+    try:
+        results = resolve_results(
+            experiment=experiment,
+            tune_spec=tune_spec,
+            namespace=namespace,
+        )
+        payload["results_path"] = results["results_path"]
+        payload["results_summary"] = results["summary"]
+        payload["result_payload"] = results["payload"]
+        if results["payload"].get("best_params"):
+            payload["best_params"] = results["payload"]["best_params"]
+        if results["payload"].get("best_value") is not None:
+            payload["best_value"] = results["payload"]["best_value"]
+    except Exception as exc:
+        payload["results_error"] = str(exc)
+
+    if _json_output:
+        print_json(payload)
+        return
+
+    pairs = [
+        ("Tune", payload["tune_name"] or ""),
+        ("Experiment", payload["experiment_name"] or ""),
+        ("Namespace", payload["namespace"] or ""),
+        ("State", style_run_state(payload["state"] or "UNKNOWN")),
+        ("Created", payload["created_at"] or ""),
+        ("Finished", payload["finished_at"] or ""),
+        ("Best Value", "" if payload.get("best_value") is None else str(payload["best_value"])),
+        ("Trials", f"{payload.get('n_completed', 0)}/{payload.get('n_trials', 0)} completed"),
+        ("Pruned", str(payload.get("n_pruned", 0))),
+        ("Failed", str(payload.get("n_failed", 0))),
+    ]
+    if "results_path" in payload:
+        pairs.append(("Results Path", payload["results_path"]))
+    if "results_error" in payload:
+        pairs.append(("Results Error", payload["results_error"]))
+    print_kv(pairs)
+    if payload.get("best_params"):
+        typer.echo("\nBest parameters:")
+        typer.echo(json.dumps(payload["best_params"], indent=2, default=str))
+
+
+@tune_app.command("download")
+def cmd_tune_download(
+    experiment_name: str = typer.Argument(..., help="Katib experiment name."),
+    output: Optional[Path] = typer.Option(None, help="Write results JSON to this path."),
+    namespace: str = typer.Option(
+        "kubeflow-user-example-com", help="Kubernetes namespace.",
+    ),
+) -> None:
+    """Download a managed tune experiment's results.json to the local machine."""
+    from kfp_workflow.cli.output import print_json
+    from kfp_workflow.tune.history import (
+        extract_tune_spec,
+        get_tune_experiment,
+        is_tune_experiment,
+        resolve_results,
+    )
+    from kfp_workflow.utils import dump_json, ensure_parent
+
+    experiment = get_tune_experiment(experiment_name, namespace)
+    if not experiment:
+        typer.echo(f"Tune experiment '{experiment_name}' was not found.", err=True)
+        raise typer.Exit(code=1)
+    if not is_tune_experiment(experiment):
+        typer.echo(f"Experiment '{experiment_name}' is not a managed tune experiment.", err=True)
+        raise typer.Exit(code=1)
+
+    tune_spec = extract_tune_spec(experiment) or {}
+    tune_name = tune_spec.get("metadata", {}).get("name", experiment_name)
+    results = resolve_results(
+        experiment=experiment,
+        tune_spec=tune_spec,
+        namespace=namespace,
+    )
+    destination = output or Path.cwd() / f"{tune_name}-{experiment_name}.json"
+    ensure_parent(destination)
+    dump_json(results["payload"], destination)
+
+    payload = {
+        "experiment_name": experiment_name,
+        "tune_name": tune_name,
+        "results_path": results["results_path"],
+        "output_path": str(destination),
+    }
+    if _json_output:
+        print_json(payload)
+        return
+
+    typer.echo(f"Tune results downloaded to {destination}")
+
+
 @tune_app.command("run")
 def cmd_tune_run(
     spec: Path = typer.Option(..., help="Path to a tune YAML spec."),
@@ -1595,6 +1783,9 @@ def cmd_tune_katib(
         "tune", "trial",
         "--spec-json", loaded.model_dump_json(),
         "--data-mount-path", loaded.storage.data_mount_path,
+        "--experiment-name", loaded.metadata.name,
+        "--namespace", loaded.runtime.namespace,
+        "--results-mount-path", loaded.storage.results_mount_path,
     ]
     manifest = build_katib_experiment(
         loaded,
@@ -1638,21 +1829,77 @@ def cmd_tune_trial(
     data_mount_path: str = typer.Option(
         "/mnt/data", help="Path where the data PVC is mounted.",
     ),
+    experiment_name: Optional[str] = typer.Option(
+        None, help="Katib experiment name for result persistence.",
+    ),
+    namespace: Optional[str] = typer.Option(
+        None, help="Kubernetes namespace for result persistence.",
+    ),
+    results_mount_path: Optional[str] = typer.Option(
+        None, help="Path where the tune results PVC is mounted.",
+    ),
+    trial_name: Optional[str] = typer.Option(
+        None, help="Katib trial/job name. Defaults to env metadata.name.",
+    ),
 ) -> None:
     """Run one Katib trial by delegating to the selected model plugin."""
     from kfp_workflow.plugins import get_plugin
     from kfp_workflow.specs import TuneSpec
+    from kfp_workflow.tune.exceptions import TrialPruned
+    from kfp_workflow.tune.results import persist_trial_result
 
     loaded = TuneSpec.model_validate_json(spec_json)
     _validate_plugin_config_or_exit(loaded.model_dump())
     plugin = get_plugin(loaded.model.name)
     trial_params = _coerce_json_scalar_values(json.loads(trial_params_json))
     base_params = plugin.hpo_base_config(loaded.model_dump())
-    objective_value = plugin.hpo_objective(
-        loaded.model_dump(),
-        {**base_params, **trial_params},
-        data_mount_path,
+    merged_params = {**base_params, **trial_params}
+    experiment_name = experiment_name or os.environ.get(
+        "KFP_WORKFLOW_TUNE_EXPERIMENT_NAME",
+        loaded.metadata.name,
     )
+    namespace = namespace or os.environ.get(
+        "KFP_WORKFLOW_TUNE_NAMESPACE",
+        loaded.runtime.namespace,
+    )
+    trial_name = trial_name or os.environ.get(
+        "KFP_WORKFLOW_TUNE_TRIAL_NAME",
+        f"{experiment_name}-trial",
+    )
+    spec_dict = loaded.model_dump()
+    if results_mount_path:
+        spec_dict["storage"]["results_mount_path"] = results_mount_path
+
+    def _persist(status: str, *, objective_value: Optional[float] = None, error: Optional[str] = None) -> None:
+        try:
+            persist_trial_result(
+                spec=spec_dict,
+                experiment_name=experiment_name,
+                namespace=namespace,
+                trial_name=trial_name,
+                params=merged_params,
+                status=status,
+                objective_value=objective_value,
+                error=error,
+            )
+        except OSError:
+            # Local/manual trial execution may not have the PVC mounted.
+            pass
+
+    try:
+        objective_value = plugin.hpo_objective(
+            spec_dict,
+            merged_params,
+            data_mount_path,
+        )
+    except TrialPruned as exc:
+        _persist("pruned", error=str(exc) or "Trial pruned.")
+        raise
+    except Exception as exc:
+        _persist("failed", error=str(exc))
+        raise
+
+    _persist("completed", objective_value=float(objective_value))
     typer.echo(f"objective={float(objective_value)}")
 
 

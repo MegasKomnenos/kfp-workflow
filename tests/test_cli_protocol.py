@@ -142,6 +142,24 @@ def test_pipeline_experiment_list_help():
     assert "--namespace" in result.output
 
 
+def test_tune_list_help():
+    result = runner.invoke(app, ["tune", "list", "--help"])
+    assert result.exit_code == 0
+    assert "--namespace" in result.output
+
+
+def test_tune_get_help():
+    result = runner.invoke(app, ["tune", "get", "--help"])
+    assert result.exit_code == 0
+    assert "experiment-name" in result.output.lower() or "EXPERIMENT_NAME" in result.output
+
+
+def test_tune_download_help():
+    result = runner.invoke(app, ["tune", "download", "--help"])
+    assert result.exit_code == 0
+    assert "--output" in result.output
+
+
 def test_serve_list_help():
     result = runner.invoke(app, ["serve", "list", "--help"])
     assert result.exit_code == 0
