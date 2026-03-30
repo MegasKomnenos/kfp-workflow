@@ -185,3 +185,34 @@ def validate_plugin_config(spec_dict: dict) -> List[str]:
             warnings.append(f"train validation: {exc}")
 
     return warnings
+
+
+def validate_serving_plugin_config(spec_dict: dict) -> List[str]:
+    """Validate serving plugin config against the selected model plugin schema.
+
+    Serving specs store the plugin key as ``model_name`` and the schema-bound
+    config in ``serving_model_config`` rather than ``model.config``.
+    """
+    from kfp_workflow.plugins import get_plugin
+
+    warnings: List[str] = []
+    model_name = spec_dict.get("model_name")
+    if not model_name:
+        return warnings
+
+    try:
+        plugin = get_plugin(model_name)
+    except KeyError as exc:
+        warnings.append(str(exc).strip("'"))
+        return warnings
+
+    model_schema = plugin.__class__.model_config_schema()
+    if model_schema is None:
+        return warnings
+
+    try:
+        model_schema.model_validate(spec_dict.get("serving_model_config", {}))
+    except Exception as exc:
+        warnings.append(f"serving_model_config validation: {exc}")
+
+    return warnings

@@ -45,6 +45,13 @@ kfp-workflow spec validate --spec configs/tuning/mrhysp_cmapss_tune.yaml --type 
 kfp-workflow spec validate --spec configs/pipelines/softs_cmapss_smoke.yaml
 kfp-workflow spec validate --spec configs/serving/softs_cmapss_serve.yaml --type serving
 kfp-workflow spec validate --spec configs/tuning/softs_cmapss_tune.yaml --type tune
+
+# Apply overrides to any supported spec type before validation
+kfp-workflow spec validate --spec configs/serving/mambasl_cmapss_serve.yaml \
+  --type serving --set metadata.name=serve-smoke
+
+# Machine-safe JSON output for scripting
+kfp-workflow --json spec validate --spec configs/tuning/mambasl_cmapss_tune.yaml --type tune
 ```
 
 ### Compile a pipeline

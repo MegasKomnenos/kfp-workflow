@@ -66,6 +66,28 @@ def _validate_plugin_config_or_exit(spec_dict: dict) -> None:
     raise typer.Exit(code=1)
 
 
+def _validate_serving_plugin_config_or_exit(spec_dict: dict) -> None:
+    """Abort CLI execution when serving plugin-specific validation fails."""
+    from kfp_workflow.config_override import validate_serving_plugin_config
+
+    errors = validate_serving_plugin_config(spec_dict)
+    if not errors:
+        return
+
+    for error in errors:
+        typer.echo(f"Error: {error}", err=True)
+    raise typer.Exit(code=1)
+
+
+def _emit_validated_spec_output(name: str, payload: dict) -> None:
+    """Emit validated spec output honoring the CLI JSON flag."""
+    if _json_output:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+        return
+    typer.echo(f"Spec '{name}' validated successfully.")
+    typer.echo(json.dumps(payload, indent=2, default=str))
+
+
 def _find_workflow_for_run(run_id: str, namespace: str) -> Optional[Dict[str, Any]]:
     """Return the Argo Workflow object for a KFP run, if present."""
     from kubernetes import client as k8s_client
@@ -310,37 +332,45 @@ def cmd_spec_validate(
     spec_type: str = typer.Option(
         "pipeline",
         "--type",
-        help="Spec type: 'pipeline' or 'serving'.",
+        help="Spec type: 'pipeline', 'serving', 'tune', or 'benchmark'.",
     ),
     set_values: List[str] = typer.Option(
         [], "--set",
-        help="Override spec values (e.g., --set train.batch_size=128). Pipeline specs only.",
+        help="Override spec values before validation (e.g., --set train.batch_size=128).",
     ),
 ) -> None:
     """Load and validate a spec file."""
     from kfp_workflow.benchmark.materialize import (
         load_materialized_benchmark_spec,
     )
-    from kfp_workflow.specs import load_pipeline_spec_with_overrides, load_serving_spec
+    from kfp_workflow.specs import (
+        load_pipeline_spec_with_overrides,
+        load_serving_spec_with_overrides,
+    )
 
-    if spec_type == "pipeline":
-        loaded = load_pipeline_spec_with_overrides(spec, set_values or None)
-        _validate_plugin_config_or_exit(loaded.model_dump())
-    elif spec_type == "serving":
-        loaded = load_serving_spec(spec)
-    elif spec_type == "tune":
-        from kfp_workflow.specs import load_tune_spec_with_overrides
-        loaded = load_tune_spec_with_overrides(spec, set_values or None)
-        _validate_plugin_config_or_exit(loaded.model_dump())
-    elif spec_type == "benchmark":
-        loaded, materialized = load_materialized_benchmark_spec(spec, set_values or None)
-    else:
-        typer.echo(f"Unknown spec type: {spec_type}", err=True)
+    try:
+        materialized: Optional[Dict[str, Any]] = None
+        if spec_type == "pipeline":
+            loaded = load_pipeline_spec_with_overrides(spec, set_values or None)
+            _validate_plugin_config_or_exit(loaded.model_dump())
+        elif spec_type == "serving":
+            loaded = load_serving_spec_with_overrides(spec, set_values or None)
+            _validate_serving_plugin_config_or_exit(loaded.model_dump())
+        elif spec_type == "tune":
+            from kfp_workflow.specs import load_tune_spec_with_overrides
+            loaded = load_tune_spec_with_overrides(spec, set_values or None)
+            _validate_plugin_config_or_exit(loaded.model_dump())
+        elif spec_type == "benchmark":
+            loaded, materialized = load_materialized_benchmark_spec(spec, set_values or None)
+        else:
+            typer.echo(f"Unknown spec type: {spec_type}", err=True)
+            raise typer.Exit(code=1)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1)
 
-    typer.echo(f"Spec '{loaded.metadata.name}' validated successfully.")
     payload = materialized if spec_type == "benchmark" else loaded.model_dump()
-    typer.echo(json.dumps(payload, indent=2, default=str))
+    _emit_validated_spec_output(loaded.metadata.name, payload)
 
 
 # ---------------------------------------------------------------------------

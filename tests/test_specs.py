@@ -11,6 +11,7 @@ from kfp_workflow.specs import (
     load_benchmark_spec,
     load_pipeline_spec,
     load_serving_spec,
+    load_serving_spec_with_overrides,
 )
 
 CONFIGS = Path(__file__).resolve().parent.parent / "configs"
@@ -31,6 +32,26 @@ def test_load_serving_spec():
     assert spec.metadata.name == "sample-serving"
     assert spec.model_name == "sample-pytorch-model"
     assert spec.runtime == "kserve-torchserve"
+
+
+def test_load_serving_spec_with_overrides(tmp_path):
+    spec_yaml = tmp_path / "serve.yaml"
+    spec_yaml.write_text("""\
+metadata:
+  name: serve-test
+namespace: test-ns
+model_name: mambasl-cmapss
+model_subpath: mambasl-cmapss/v1
+runtime: custom
+predictor_image: kfp-workflow:latest
+replicas: 1
+""")
+    spec = load_serving_spec_with_overrides(
+        spec_yaml,
+        ["metadata.name=serve-overridden", "replicas=3"],
+    )
+    assert spec.metadata.name == "serve-overridden"
+    assert spec.replicas == 3
 
 
 def test_load_benchmark_spec():

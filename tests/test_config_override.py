@@ -8,6 +8,7 @@ from kfp_workflow.config_override import (
     coerce_value,
     set_nested,
     validate_plugin_config,
+    validate_serving_plugin_config,
 )
 from kfp_workflow.cli.main import app
 
@@ -255,6 +256,38 @@ class TestValidatePluginConfig:
         assert warnings == []
 
 
+class TestValidateServingPluginConfig:
+    def test_valid_serving_config_no_warnings(self):
+        spec = {
+            "model_name": "mambasl-cmapss",
+            "serving_model_config": {"d_model": 128},
+        }
+        warnings = validate_serving_plugin_config(spec)
+        assert warnings == []
+
+    def test_invalid_serving_type_produces_warning(self):
+        spec = {
+            "model_name": "mambasl-cmapss",
+            "serving_model_config": {"d_model": "not_an_int"},
+        }
+        warnings = validate_serving_plugin_config(spec)
+        assert len(warnings) == 1
+        assert "serving_model_config" in warnings[0]
+
+    def test_unknown_serving_plugin_produces_warning(self):
+        spec = {
+            "model_name": "nonexistent-plugin",
+            "serving_model_config": {},
+        }
+        warnings = validate_serving_plugin_config(spec)
+        assert len(warnings) == 1
+        assert "Unknown model plugin" in warnings[0]
+
+    def test_missing_serving_model_name_no_warnings(self):
+        warnings = validate_serving_plugin_config({"serving_model_config": {}})
+        assert warnings == []
+
+
 # ---------------------------------------------------------------------------
 # CLI --set flag (help text presence)
 # ---------------------------------------------------------------------------
@@ -340,3 +373,26 @@ dataset:
         runner = CliRunner()
         result = runner.invoke(app, ["spec", "validate", "--help"])
         assert "--set" in result.output
+
+    def test_spec_validate_serving_fails_on_plugin_config_error(self, tmp_path):
+        spec_yaml = tmp_path / "serve.yaml"
+        spec_yaml.write_text("""\
+metadata:
+  name: test-serving
+namespace: test-ns
+model_name: mambasl-cmapss
+model_subpath: mambasl-cmapss/v1
+runtime: custom
+predictor_image: kfp-workflow:latest
+serving_model_config:
+  d_model: not_an_int
+""")
+        runner = CliRunner()
+
+        result = runner.invoke(
+            app,
+            ["spec", "validate", "--spec", str(spec_yaml), "--type", "serving"],
+        )
+
+        assert result.exit_code == 1
+        assert "serving_model_config validation" in result.output

@@ -310,6 +310,18 @@ def load_serving_spec(path: str | Path) -> ServingSpec:
     return ServingSpec.model_validate(load_yaml(Path(path)))
 
 
+def load_serving_spec_with_overrides(
+    path: str | Path,
+    overrides: list[str] | None = None,
+) -> ServingSpec:
+    """Load a serving spec from YAML, apply CLI overrides, then validate."""
+    raw = load_yaml(Path(path))
+    if overrides:
+        from kfp_workflow.config_override import apply_overrides
+        raw = apply_overrides(raw, overrides)
+    return ServingSpec.model_validate(raw)
+
+
 def load_tune_spec(path: str | Path) -> TuneSpec:
     """Load and validate a tuning spec from a YAML file."""
     return TuneSpec.model_validate(load_yaml(Path(path)))

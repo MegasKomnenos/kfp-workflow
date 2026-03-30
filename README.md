@@ -94,6 +94,8 @@ kfp-workflow cluster bootstrap  --spec <path> [--type {pipeline,benchmark}] [--d
 kfp-workflow spec validate      --spec <path> [--type {pipeline,serving,tune,benchmark}] [--set key=value ...]
 ```
 
+`spec validate` applies `--set` overrides before validation for every supported spec type. With global `--json`, it emits only the validated payload so the command can be used safely in scripts.
+
 ## Pipeline DAG
 
 ```
@@ -120,6 +122,7 @@ Pipeline, benchmark, serving, and tuning behaviour is driven by YAML specs under
 **ServingSpec** supports:
 - `runtime: custom` — Uses custom container predictor with `predictor_image`
 - `runtime: kserve-torchserve` — Standard KServe runtime with PVC storage
+- `serving_model_config` — Plugin-specific serving/model config validated against the selected plugin schema during `spec validate`
 
 **BenchmarkSpec** supports:
 - `model` — Temporary serving target, deployed as a KServe `InferenceService`

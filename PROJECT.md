@@ -151,5 +151,6 @@ test/
     ├── test_pipeline_compile.py       # Pipeline compilation verification
     ├── test_registry.py               # File-backed registry CRUD tests
     ├── test_plugin_system.py          # Plugin ABC, registry, _build_cfg tests
+    ├── test_spec_validate_cli.py      # Spec validate JSON/output/override regression tests
     └── test_tune_katib.py             # Katib manifest + shared trial-runner regression tests
 ```
