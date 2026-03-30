@@ -22,6 +22,30 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="kfp")
 _json_output = False
 
 
+def _coerce_json_scalar_values(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Coerce JSON scalar strings produced by Katib back into Python types."""
+    coerced: Dict[str, Any] = {}
+    for key, value in payload.items():
+        if isinstance(value, (bool, int, float)) or value is None:
+            coerced[key] = value
+            continue
+        if value == "True":
+            coerced[key] = True
+            continue
+        if value == "False":
+            coerced[key] = False
+            continue
+        try:
+            if "." in str(value):
+                coerced[key] = float(value)
+            else:
+                coerced[key] = int(value)
+            continue
+        except (TypeError, ValueError):
+            coerced[key] = value
+    return coerced
+
+
 def _run_state_str(state: object) -> str:
     """Extract run state as a plain string (handles enum or str)."""
     if state is None:
@@ -1538,8 +1562,9 @@ def cmd_tune_katib(
 
     trial_command = [
         "python", "-m", "kfp_workflow.cli.main",
-        "pipeline", "submit",
-        "--spec", "/mnt/config/spec.yaml",
+        "tune", "trial",
+        "--spec-json", loaded.model_dump_json(),
+        "--data-mount-path", loaded.storage.data_mount_path,
     ]
     manifest = build_katib_experiment(
         loaded,
@@ -1572,6 +1597,33 @@ def cmd_tune_katib(
         f"Katib experiment '{loaded.metadata.name}' submitted "
         f"to namespace '{loaded.runtime.namespace}'."
     )
+
+
+@tune_app.command("trial", hidden=True)
+def cmd_tune_trial(
+    spec_json: str = typer.Option(..., help="Serialized tune spec JSON."),
+    trial_params_json: str = typer.Option(
+        ..., help="Serialized Katib trial parameter assignments.",
+    ),
+    data_mount_path: str = typer.Option(
+        "/mnt/data", help="Path where the data PVC is mounted.",
+    ),
+) -> None:
+    """Run one Katib trial by delegating to the selected model plugin."""
+    from kfp_workflow.plugins import get_plugin
+    from kfp_workflow.specs import TuneSpec
+
+    loaded = TuneSpec.model_validate_json(spec_json)
+    _validate_plugin_config_or_exit(loaded.model_dump())
+    plugin = get_plugin(loaded.model.name)
+    trial_params = _coerce_json_scalar_values(json.loads(trial_params_json))
+    base_params = plugin.hpo_base_config(loaded.model_dump())
+    objective_value = plugin.hpo_objective(
+        loaded.model_dump(),
+        {**base_params, **trial_params},
+        data_mount_path,
+    )
+    typer.echo(f"objective={float(objective_value)}")
 
 
 @tune_app.command("show-space")

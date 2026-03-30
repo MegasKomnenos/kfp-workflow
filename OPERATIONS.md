@@ -108,6 +108,10 @@ kfp-workflow tune katib --spec configs/tuning/softs_cmapss_tune.yaml --dry-run
 kfp-workflow tune katib --spec configs/tuning/mambasl_cmapss_tune.yaml
 kfp-workflow tune katib --spec configs/tuning/softs_cmapss_tune.yaml
 
+# Katib trial pods run the internal shared executor:
+# kfp-workflow tune trial --spec-json ... --trial-params-json ...
+# Objective metrics must be printed to stdout as objective=<value>.
+
 # JSON output for scripting
 kfp-workflow --json tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
   --set hpo.max_trials=5 --data-mount-path ./data

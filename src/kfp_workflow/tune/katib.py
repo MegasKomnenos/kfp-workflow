@@ -1,11 +1,8 @@
-"""Generate Katib Experiment CRD manifests from project-owned types.
-
-This module is a pure function of ``TuneSpec`` and ``SearchParamSpec`` — it
-has zero plugin imports.
-"""
+"""Generate Katib Experiment CRD manifests from project-owned types."""
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List
 
 from kfp_workflow.specs import SearchParamSpec, TuneSpec
@@ -59,6 +56,17 @@ def search_param_to_katib(param: SearchParamSpec) -> Dict[str, Any]:
 _ALGORITHM_MAP = {"tpe": "tpe", "random": "random", "grid": "grid"}
 
 
+def _trial_parameters_json(search_space: List[SearchParamSpec]) -> str:
+    """Return a Katib placeholder JSON object passed to the trial command."""
+    return json.dumps(
+        {
+            param.name: f"${{trialParameters.{param.name}}}"
+            for param in search_space
+        },
+        separators=(",", ":"),
+    )
+
+
 def build_katib_experiment(
     spec: TuneSpec,
     search_space: List[SearchParamSpec],
@@ -79,19 +87,58 @@ def build_katib_experiment(
         Command + args for the trial container.  Katib will append
         ``--<name>=<value>`` flags for each search parameter.
     """
+    container: Dict[str, Any] = {
+        "name": "training-container",
+        "image": trial_image,
+        "imagePullPolicy": spec.runtime.image_pull_policy,
+        "command": [
+            *trial_command,
+            "--trial-params-json",
+            _trial_parameters_json(search_space),
+        ],
+        "resources": {
+            "requests": {
+                "cpu": spec.runtime.resources.cpu_request,
+                "memory": spec.runtime.resources.memory_request,
+            },
+            "limits": {
+                "cpu": spec.runtime.resources.cpu_limit,
+                "memory": spec.runtime.resources.memory_limit,
+            },
+        },
+        "volumeMounts": [
+            {
+                "name": "workflow-data",
+                "mountPath": spec.storage.data_mount_path,
+                "readOnly": True,
+            },
+            {
+                "name": "workflow-models",
+                "mountPath": spec.storage.model_mount_path,
+            },
+        ],
+    }
+    if spec.runtime.use_gpu:
+        container["resources"]["requests"]["nvidia.com/gpu"] = (
+            spec.runtime.resources.gpu_request
+        )
+        container["resources"]["limits"]["nvidia.com/gpu"] = (
+            spec.runtime.resources.gpu_limit
+        )
+
     return {
         "apiVersion": "kubeflow.org/v1beta1",
         "kind": "Experiment",
         "metadata": {
             "name": spec.metadata.name,
             "namespace": spec.runtime.namespace,
+            "annotations": {"sidecar.istio.io/inject": "false"},
         },
         "spec": {
+            "resumePolicy": "Never",
             "objective": {
                 "type": "minimize",
-                "goal": 0.0,
                 "objectiveMetricName": "objective",
-                "additionalMetricNames": ["rmse", "score", "mae"],
             },
             "algorithm": {
                 "algorithmName": _ALGORITHM_MAP.get(
@@ -104,6 +151,7 @@ def build_katib_experiment(
             "parameters": [
                 search_param_to_katib(p) for p in search_space
             ],
+            "metricsCollectorSpec": {"collector": {"kind": "StdOut"}},
             "trialTemplate": {
                 "primaryContainerName": "training-container",
                 "trialParameters": [
@@ -114,18 +162,33 @@ def build_katib_experiment(
                     }
                     for p in search_space
                 ],
+                "successCondition": 'status.conditions.#(type=="Complete")#',
+                "failureCondition": 'status.conditions.#(type=="Failed")#',
                 "trialSpec": {
                     "apiVersion": "batch/v1",
                     "kind": "Job",
                     "spec": {
+                        "backoffLimit": 0,
                         "template": {
+                            "metadata": {
+                                "annotations": {"sidecar.istio.io/inject": "false"}
+                            },
                             "spec": {
-                                "containers": [
+                                "serviceAccountName": spec.runtime.service_account,
+                                "containers": [container],
+                                "volumes": [
                                     {
-                                        "name": "training-container",
-                                        "image": trial_image,
-                                        "command": trial_command,
-                                    }
+                                        "name": "workflow-data",
+                                        "persistentVolumeClaim": {
+                                            "claimName": spec.storage.data_pvc,
+                                        },
+                                    },
+                                    {
+                                        "name": "workflow-models",
+                                        "persistentVolumeClaim": {
+                                            "claimName": spec.storage.model_pvc,
+                                        },
+                                    },
                                 ],
                                 "restartPolicy": "Never",
                             }

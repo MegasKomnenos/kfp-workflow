@@ -21,6 +21,7 @@ load_data → preprocess → train → evaluate → save_model → predict
 ```
 
 Plugins can optionally implement HPO hooks (`hpo_search_space`, `hpo_base_config`, `hpo_objective`) to enable hyperparameter tuning via the project-owned Optuna engine.
+Katib-backed distributed HPO reuses the same plugin HPO contract by launching an internal `kfp-workflow tune trial` command inside each trial pod and collecting `objective=<value>` from stdout.
 
 Plugins are discovered via an explicit registry dict in `plugins/__init__.py`. To add a new model:
 
@@ -219,6 +220,8 @@ kfp-workflow tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
 # Generate Katib manifest for distributed HPO
 kfp-workflow tune katib --spec configs/tuning/mambasl_cmapss_tune.yaml --dry-run
 ```
+
+`kfp-workflow tune katib` renders a Katib `Experiment` whose trial Job mounts the workflow PVCs, calls the hidden shared `tune trial` entrypoint, and reports the objective through Katib's `StdOut` collector.
 
 Values are auto-coerced: `128` → int, `0.001` → float, `true`/`false` → bool, `[1,2,3]` → list.
 

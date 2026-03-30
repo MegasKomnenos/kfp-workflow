@@ -97,7 +97,7 @@ test/
 │   ├── specs.py                       # Pydantic config models (PipelineSpec, BenchmarkSpec, ServingSpec, TuneSpec)
 │   ├── utils.py                       # YAML/JSON I/O helpers
 │   ├── cli/
-│   │   ├── main.py                    # Typer CLI (pipeline, benchmark, serve, registry, cluster, spec, tune)
+│   │   ├── main.py                    # Typer CLI (pipeline, benchmark, serve, registry, cluster, spec, tune incl. hidden Katib trial runner)
 │   │   └── output.py                  # Rich-based structured output (tables, colors, JSON)
 │   ├── benchmark/
 │   │   ├── __init__.py
@@ -129,7 +129,7 @@ test/
 │   │   ├── __init__.py
 │   │   ├── exceptions.py              # TrialPruned exception (project-level, no Optuna leak)
 │   │   ├── engine.py                  # Optuna HPO engine (study, trial loop, suggest)
-│   │   └── katib.py                   # Katib Experiment CRD manifest builder
+│   │   └── katib.py                   # Katib Experiment CRD manifest builder with shared trial-pod command wiring
 │   ├── registry/
 │   │   ├── base.py                    # ABCs: ModelRegistryBase, DatasetRegistryBase
 │   │   ├── model_registry.py          # FileModelRegistry (JSON on PVC)
@@ -150,5 +150,6 @@ test/
     ├── test_output.py                 # Output formatting unit tests
     ├── test_pipeline_compile.py       # Pipeline compilation verification
     ├── test_registry.py               # File-backed registry CRUD tests
-    └── test_plugin_system.py          # Plugin ABC, registry, _build_cfg tests
+    ├── test_plugin_system.py          # Plugin ABC, registry, _build_cfg tests
+    └── test_tune_katib.py             # Katib manifest + shared trial-runner regression tests
 ```
