@@ -129,6 +129,16 @@ kfp-workflow spec validate \
 ```
 
 오버라이드가 적용된 상태의 스펙을 검증합니다. 실제 제출 전에 설정이 유효한지 확인하는 용도로 유용합니다.
+이제 `--set`은 pipeline 뿐 아니라 serving / tune / benchmark 검증에도 동일하게 적용됩니다.
+
+```bash
+# serving 스펙도 override 후 검증 가능
+kfp-workflow spec validate \
+    --spec configs/serving/mambasl_cmapss_serve.yaml \
+    --type serving \
+    --set metadata.name=mambasl-cmapss-serving-smoke \
+    --set serving_model_config.d_model=128
+```
 
 ### 4. `tune run`
 
@@ -190,7 +200,7 @@ kfp-workflow tune show-space \
 | `feature_mode` | str | settings_plus_sensors | 특성 모드 |
 | `norm_mode` | str | condition_minmax | 정규화 모드 |
 
-잘못된 타입을 사용하면 경고가 표시됩니다:
+잘못된 타입을 사용하면 즉시 실패합니다:
 
 ```bash
 kfp-workflow spec validate \
@@ -199,12 +209,23 @@ kfp-workflow spec validate \
 ```
 
 ```
-Warning: model.config validation: 1 validation error for MambaSLModelConfig
+Error: model.config validation: 1 validation error for MambaSLModelConfig
 d_model
   Input should be a valid integer ...
 ```
 
-> 스키마는 `extra="allow"`로 설정되어 있으므로, 알 수 없는 필드를 추가해도 오류가 아닌 경고만 발생합니다.
+> 스키마는 `extra="allow"`로 설정되어 있으므로, 알 수 없는 필드는 허용될 수 있지만 타입 불일치는 `spec validate` 단계에서 즉시 실패합니다.
+
+### 3-1. `--json` 출력
+
+전역 `--json` 플래그를 사용하면 `spec validate`는 순수 JSON만 출력합니다.
+스크립트나 파이프라인에서 결과를 그대로 파싱할 때 사용합니다.
+
+```bash
+kfp-workflow --json spec validate \
+    --spec configs/tuning/mambasl_cmapss_tune.yaml \
+    --type tune
+```
 
 ## 실전 예제
 
