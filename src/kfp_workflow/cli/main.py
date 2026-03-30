@@ -1417,6 +1417,17 @@ def _run_kubectl(args: list[str], *, input_text: str | None = None) -> None:
     subprocess.run(args, check=True, text=True, input=input_text)
 
 
+def _kubectl_completed(args: list[str], *, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+    """Run kubectl and return the completed process for custom error handling."""
+    return subprocess.run(
+        args,
+        check=False,
+        text=True,
+        input=input_text,
+        capture_output=True,
+    )
+
+
 @cluster_app.command("bootstrap")
 def cmd_cluster_bootstrap(
     spec: Path = typer.Option(..., help="Path to a pipeline YAML spec."),
@@ -1770,6 +1781,7 @@ def cmd_tune_katib(
 
     from kfp_workflow.plugins import get_plugin
     from kfp_workflow.specs import load_tune_spec_with_overrides
+    from kfp_workflow.tune.history import get_tune_experiment, is_tune_experiment
     from kfp_workflow.tune.engine import resolve_search_space
     from kfp_workflow.tune.katib import build_katib_experiment
 
@@ -1810,10 +1822,41 @@ def cmd_tune_katib(
         if dry_run:
             return
 
-    subprocess.run(
+    apply_result = _kubectl_completed(
         ["kubectl", "apply", "-f", "-"],
-        check=True, text=True, input=json.dumps(manifest),
+        input_text=json.dumps(manifest),
     )
+    if apply_result.returncode != 0:
+        stderr = apply_result.stderr or ""
+        immutable_spec_error = (
+            "only spec.parallelTrialCount, spec.maxTrialCount and spec.maxFailedTrialCount are editable"
+        )
+        existing = get_tune_experiment(loaded.metadata.name, loaded.runtime.namespace)
+        if immutable_spec_error in stderr and existing and is_tune_experiment(existing):
+            typer.echo(
+                f"Katib experiment '{loaded.metadata.name}' exists with immutable spec fields; recreating it.",
+                err=True,
+            )
+            _run_kubectl(
+                [
+                    "kubectl", "delete", "experiment", loaded.metadata.name,
+                    "-n", loaded.runtime.namespace,
+                    "--ignore-not-found=true",
+                ]
+            )
+            _run_kubectl(
+                ["kubectl", "create", "-f", "-"],
+                input_text=json.dumps(manifest),
+            )
+        else:
+            if apply_result.stdout:
+                typer.echo(apply_result.stdout.rstrip())
+            if stderr:
+                typer.echo(stderr.rstrip(), err=True)
+            raise typer.Exit(code=1)
+    elif apply_result.stdout:
+        typer.echo(apply_result.stdout.rstrip())
+
     typer.echo(
         f"Katib experiment '{loaded.metadata.name}' submitted "
         f"to namespace '{loaded.runtime.namespace}'."

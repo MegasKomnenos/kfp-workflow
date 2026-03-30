@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 from typer.testing import CliRunner
@@ -194,3 +195,64 @@ def test_tune_trial_persists_result_payload(tmp_path, monkeypatch):
     assert payload["status"] == "completed"
     assert payload["objective_value"] == pytest.approx(2.5)
     assert payload["params"]["base_only"] == 1
+
+
+def test_tune_katib_recreates_managed_experiment_on_immutable_spec_error(monkeypatch):
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    class DummyPlugin:
+        def hpo_search_space(self, spec, profile):
+            return [
+                SearchParamSpec(name="d_model", type="categorical", values=[32, 64]),
+            ]
+
+    def fake_completed(args, *, input_text=None):
+        calls.append(("completed", tuple(args)))
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=1,
+            stdout="",
+            stderr=(
+                "admission webhook denied the request: spec: Forbidden: "
+                "only spec.parallelTrialCount, spec.maxTrialCount and "
+                "spec.maxFailedTrialCount are editable"
+            ),
+        )
+
+    def fake_run(args, *, input_text=None):
+        calls.append(("run", tuple(args)))
+
+    monkeypatch.setattr("kfp_workflow.plugins.get_plugin", lambda model_name: DummyPlugin())
+    monkeypatch.setattr("kfp_workflow.cli.main._validate_plugin_config_or_exit", lambda spec_dict: None)
+    monkeypatch.setattr("kfp_workflow.cli.main._kubectl_completed", fake_completed)
+    monkeypatch.setattr("kfp_workflow.cli.main._run_kubectl", fake_run)
+    monkeypatch.setattr(
+        "kfp_workflow.tune.history.get_tune_experiment",
+        lambda name, namespace: {
+            "metadata": {
+                "labels": {
+                    "app.kubernetes.io/managed-by": "kfp-workflow",
+                    "kfp-workflow/type": "tune",
+                },
+                "annotations": {"kfp-workflow/spec-json": _sample_tune_spec().model_dump_json()},
+            }
+        },
+    )
+    monkeypatch.setattr("kfp_workflow.tune.history.is_tune_experiment", lambda experiment: True)
+
+    spec = _sample_tune_spec()
+    result = runner.invoke(
+        app,
+        [
+            "tune",
+            "katib",
+            "--spec",
+            "configs/tuning/mambasl_cmapss_tune.yaml",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "recreating it" in result.output
+    assert ("completed", ("kubectl", "apply", "-f", "-")) in calls
+    assert ("run", ("kubectl", "delete", "experiment", spec.metadata.name, "-n", spec.runtime.namespace, "--ignore-not-found=true")) in calls
+    assert ("run", ("kubectl", "create", "-f", "-")) in calls
