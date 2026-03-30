@@ -14,10 +14,13 @@ test/
 ├── configs/
 │   ├── benchmarks/
 │   │   ├── mambasl_cmapss_kepler_smoke.yaml         # Benchmark spec: deploy MambaSL, replay C-MAPSS, collect Kepler energy
+│   │   ├── mambasl_cmapss_test.yaml                 # Benchmark spec: deploy MambaSL, FD001 test-set eval, collect F1/precision/recall/accuracy
 │   │   ├── scenarios/
-│   │   │   └── mambasl_cmapss_timeseries_smoke.yaml # Scenario ref: FD001 multi-unit 1 Hz replay (5 sections)
+│   │   │   ├── mambasl_cmapss_timeseries_smoke.yaml # Scenario ref: FD001 multi-unit 1 Hz replay (5 sections)
+│   │   │   └── mambasl_cmapss_test_fd001.yaml       # Scenario ref: FD001 full test-set, last-window per unit, test-eval pipeline
 │   │   └── metrics/
-│   │       └── kepler_predictor_energy.yaml         # Metric ref: Kepler predictor-container energy collector
+│   │       ├── kepler_predictor_energy.yaml         # Metric ref: Kepler predictor-container energy collector
+│   │       └── cmapss_test_fd001.yaml               # Metric ref: C-MAPSS test-set F1 / precision / recall / accuracy (threshold 30)
 │   ├── pipelines/
 │   │   ├── sample_train.yaml          # Example training pipeline spec
 │   │   ├── mambasl_cmapss_smoke.yaml  # MambaSL C-MAPSS smoke test (2 epochs, CPU)
@@ -104,7 +107,7 @@ test/
 │   │   ├── history.py                 # Benchmark run discovery, PVC result lookup, and download helpers
 │   │   ├── interfaces.py              # Standard dataset, scenario, and metric interfaces
 │   │   ├── materialize.py             # YAML/Python ref loading and benchmark spec materialization
-│   │   └── runtime.py                 # Built-in C-MAPSS replay and Kepler metric collection
+│   │   └── runtime.py                 # Built-in dataset sources, pipelines, and metric collectors (C-MAPSS replay, test-set eval, Kepler energy)
 │   ├── components/
 │   │   ├── __init__.py                # Re-exports all 5 component functions
 │   │   ├── load_data.py               # KFP component: load data via plugin

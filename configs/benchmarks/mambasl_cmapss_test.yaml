@@ -1,0 +1,58 @@
+metadata:
+  name: mambasl-cmapss-benchmark-test
+  description: MambaSL C-MAPSS FD001 test-set accuracy benchmark (F1 / precision / recall / accuracy)
+  version: v1
+
+runtime:
+  namespace: kubeflow-user-example-com
+  pipeline_root: ""
+  image: kfp-workflow:latest
+  image_pull_policy: IfNotPresent
+  service_account: default-editor
+  host: "http://127.0.0.1:8888"
+  port_forward_namespace: kubeflow
+  port_forward_service: svc/ml-pipeline
+  use_gpu: false
+  torch_num_threads: 4
+  resources:
+    cpu_request: "2"
+    cpu_limit: "2"
+    memory_request: 4Gi
+    memory_limit: 4Gi
+    gpu_request: "0"
+    gpu_limit: "0"
+
+storage:
+  data_pvc: dataset-store
+  model_pvc: model-store
+  results_pvc: benchmark-store
+  storage_class: local-path
+  data_size: 8Gi
+  model_size: 8Gi
+  results_size: 8Gi
+  data_mount_path: /mnt/data
+  model_mount_path: /mnt/models
+  results_mount_path: /mnt/benchmarks
+
+model:
+  model_name: mambasl-cmapss
+  model_version: v1
+  model_pvc: model-store
+  model_subpath: mambasl-cmapss/v1
+  predictor_image: kfp-workflow:latest
+  service_name: mbsl-bench-test
+  cleanup: true
+  wait_timeout: 300
+  resources:
+    cpu_request: "2"
+    cpu_limit: "2"
+    memory_request: 4Gi
+    memory_limit: 4Gi
+    gpu_request: "0"
+    gpu_limit: "0"
+
+scenario:
+  ref: scenarios/mambasl_cmapss_test_fd001.yaml
+
+metrics:
+  - ref: metrics/cmapss_test_fd001.yaml

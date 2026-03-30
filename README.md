@@ -134,11 +134,24 @@ A benchmark is a bundle of:
 - `metrics` — Collectors that observe the benchmark target while the scenario runs
 
 Built-in benchmark pieces included in this repo:
-- `cmapss-timeseries` — Replay-ready multivariate time-series sections from C-MAPSS
-- `sequential-replay` — Sends one section at a time to the benchmark `InferenceService`
-- `kepler-energy` — Reads `kepler_container_joules_total` from Prometheus/Kepler for the predictor container
 
-The shipped smoke benchmark is `configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml`. It deploys `mambasl-cmapss`, replays one `fd[]` entry for FD001 with `unit_ids: [1, 2, 3]` and `max_sections: 5` at 1 Hz, and writes `results.json` under `benchmark-results/` on the benchmark PVC.
+**Dataset sources:**
+- `cmapss-timeseries` — All sliding-window sections from the C-MAPSS test set (for streaming/latency benchmarks)
+- `cmapss-test-set` — One last-window section per test unit from the independent C-MAPSS test set, using `make_last_windows` semantics (for accuracy evaluation)
+
+**Pipelines:**
+- `sequential-replay` — Sends sections at a configurable rate (Hz) to the benchmark `InferenceService`
+- `test-eval` — Sends each section once with no rate limiting; suited for test-set accuracy evaluation
+
+**Metrics:**
+- `kepler-energy` — Reads `kepler_container_joules_total` from Prometheus/Kepler for the predictor container
+- `cmapss-test` — Evaluates per-unit RUL predictions against `RUL_FDxxx.txt` ground truth; applies a configurable threshold (default 30 cycles) to convert RUL regression to binary classification and returns `f1_score`, `precision`, `recall`, `accuracy`
+
+**Shipped benchmarks:**
+
+`configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml` — deploys `mambasl-cmapss`, replays FD001 units [1,2,3] with `max_sections: 5` at 1 Hz, collects Kepler energy.
+
+`configs/benchmarks/mambasl_cmapss_test.yaml` — deploys `mambasl-cmapss`, evaluates the full FD001 test set (one request per unit), and returns F1/precision/recall/accuracy in `results.json`.
 
 ```bash
 kfp-workflow cluster bootstrap \

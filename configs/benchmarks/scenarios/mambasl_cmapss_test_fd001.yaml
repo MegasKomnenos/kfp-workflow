@@ -1,0 +1,12 @@
+kind: inline
+dataset:
+  kind: cmapss-test-set
+  config:
+    fd:
+      - fd_name: FD001
+    feature_mode: settings_plus_sensors
+    norm_mode: condition_minmax
+pipeline:
+  kind: test-eval
+  config:
+    request_timeout: 30

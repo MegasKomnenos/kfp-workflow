@@ -98,14 +98,28 @@ def _looks_like_benchmark_spec(value: Any) -> bool:
     }.issubset(value.keys())
 
 
+def _has_benchmark_component_in_spec(workflow: Dict[str, Any]) -> bool:
+    """Check spec.templates for the run-benchmark-component task definition."""
+    templates = workflow.get("spec", {}).get("templates") or []
+    for template in templates:
+        if template.get("name") == "run-benchmark-component":
+            return True
+        for task in (template.get("dag") or {}).get("tasks") or []:
+            if task.get("name") == "run-benchmark-component":
+                return True
+    return False
+
+
 def is_benchmark_workflow(workflow: Dict[str, Any]) -> bool:
-    """Identify benchmark workflows from their node graph and embedded spec."""
+    """Identify benchmark workflows from their template spec, node graph, and embedded spec."""
     nodes = workflow.get("status", {}).get("nodes", {}) or {}
     display_names = {
         node.get("displayName") or node.get("name") or ""
         for node in nodes.values()
     }
-    if "run-benchmark-component" not in display_names:
+    found_in_nodes = "run-benchmark-component" in display_names
+    found_in_spec = _has_benchmark_component_in_spec(workflow)
+    if not found_in_nodes and not found_in_spec:
         return False
     return extract_benchmark_spec(workflow) is not None
 
@@ -123,6 +137,10 @@ def summarize_result_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     metric_0 = metrics.get("metric_0", {}) if isinstance(metrics.get("metric_0"), dict) else {}
     if "delta_joules" in metric_0:
         summary["delta_joules"] = metric_0["delta_joules"]
+    for metric_val in metrics.values():
+        if isinstance(metric_val, dict) and "f1_score" in metric_val:
+            summary["f1_score"] = metric_val["f1_score"]
+            break
     return summary
 
 
@@ -178,7 +196,7 @@ def _list_result_candidates(
     namespace: str,
     benchmark_name: str,
 ) -> List[str]:
-    root = f"/mnt/results/{benchmark_name}"
+    root = f"/mnt/results/benchmark-results/{benchmark_name}"
     command = ["sh", "-lc", f"find {root} -name results.json -print 2>/dev/null | sort"]
     output = _exec_with_results_pvc(
         pvc_name=pvc_name,

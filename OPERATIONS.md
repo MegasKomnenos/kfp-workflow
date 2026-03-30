@@ -34,6 +34,7 @@ kfp-workflow spec validate --spec configs/pipelines/mambasl_cmapss_smoke.yaml
 kfp-workflow spec validate --spec configs/serving/mambasl_cmapss_serve.yaml --type serving
 kfp-workflow spec validate --spec configs/tuning/mambasl_cmapss_tune.yaml --type tune
 kfp-workflow spec validate --spec configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml --type benchmark
+kfp-workflow spec validate --spec configs/benchmarks/mambasl_cmapss_test.yaml --type benchmark
 
 # MR-HY-SP
 kfp-workflow spec validate --spec configs/pipelines/mrhysp_cmapss_smoke.yaml
@@ -328,12 +329,21 @@ kfp-workflow cluster bootstrap \
 
 ### 3. Compile and submit the benchmark
 ```bash
+# Kepler energy smoke benchmark
 kfp-workflow benchmark compile \
   --spec configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml \
   --output pipelines/mambasl_cmapss_kepler_smoke.yaml
 
 kfp-workflow benchmark submit \
   --spec configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml
+
+# Test-set accuracy benchmark (F1 / precision / recall / accuracy)
+kfp-workflow benchmark compile \
+  --spec configs/benchmarks/mambasl_cmapss_test.yaml \
+  --output pipelines/mambasl_cmapss_test.yaml
+
+kfp-workflow benchmark submit \
+  --spec configs/benchmarks/mambasl_cmapss_test.yaml
 ```
 
 ### 4. Wait for completion and verify result persistence
@@ -349,10 +359,16 @@ kfp-workflow benchmark download <run_id>
 # ./mambasl-cmapss-benchmark-smoke-ba893c5b-14bb-4fde-8229-a040127ee36e.json
 ```
 
-Expected smoke result:
+Expected Kepler smoke result:
 - `status == "succeeded"`
 - `scenario.request_count == 5`
 - `metrics.metric_0.delta_joules > 0`
+
+Expected test-set accuracy result:
+- `status == "succeeded"`
+- `scenario.request_count == 100` (one request per FD001 test unit)
+- `metrics.metric_0.f1_score` — binary F1 at RUL threshold 30
+- `metrics.metric_0.precision`, `metrics.metric_0.recall`, `metrics.metric_0.accuracy`
 
 Use direct PVC path inspection only for troubleshooting after `benchmark get/download`.
 

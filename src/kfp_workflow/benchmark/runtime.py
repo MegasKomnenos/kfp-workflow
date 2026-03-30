@@ -11,7 +11,7 @@ import tempfile
 import time
 import types
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Type
+from typing import Any, Dict, Iterable, List, Tuple, Type
 
 import requests
 
@@ -172,6 +172,93 @@ class CmapssTimeseriesDatasetSource(DatasetSource):
                     break
 
 
+class CmapssTestSetDatasetSource(DatasetSource):
+    """Yields one last-window section per test unit from the independent C-MAPSS test set.
+
+    Uses make_last_windows semantics: the last window_size observations per unit,
+    with leading-row padding when the unit's series is shorter than window_size.
+    This is the canonical evaluation convention used by the training pipeline.
+    """
+
+    def __init__(self, spec: Dict[str, Any], config: Dict[str, Any]) -> None:
+        self._spec = spec
+        self._config = config
+
+    def iter_sections(self) -> Iterable[Dict[str, Any]]:
+        import numpy as np
+        _ensure_model_package_on_path("mambasl-new")
+        from mambasl_new.cmapss.constants import FD_CONFIGS
+        from mambasl_new.cmapss.data import load_fd
+        from mambasl_new.cmapss.preprocess import get_feature_cols, preprocess_frames
+
+        storage = self._spec["storage"]
+        configured_subpath = str(
+            self._config.get("data_subpath", "") or storage.get("data_subpath", "")
+        ).strip("/")
+        base_mount = Path(storage["data_mount_path"])
+        dataset_root = base_mount / configured_subpath if configured_subpath else base_mount
+        data_dir = resolve_cmapss_data_dir(str(dataset_root))
+
+        model_dir = Path(storage["model_mount_path"]) / self._spec["model"]["model_subpath"]
+        model_config_path = model_dir / "model_config.json"
+        model_config = json.loads(model_config_path.read_text("utf-8")) if model_config_path.exists() else {}
+        model_cfg = model_config.get("cfg", model_config)
+
+        feature_mode = self._config.get("feature_mode", "settings_plus_sensors")
+        norm_mode = self._config.get("norm_mode", "condition_minmax")
+        seed = int(self._config.get("seed", 42))
+        window_size = int(
+            self._config.get(
+                "window_size",
+                model_config.get("seq_len", model_cfg.get("window_size", 30)),
+            )
+        )
+        fd_entries = normalize_cmapss_fd_entries(
+            self._config,
+            context="scenario.dataset.config",
+        )
+        feature_cols = get_feature_cols(feature_mode)
+
+        for entry in fd_entries:
+            fd_name = entry["fd_name"]
+            train_df, test_df, _ = load_fd(Path(data_dir), fd_name)
+            _, _, te_df = preprocess_frames(
+                train_df,
+                train_df.copy(),
+                test_df.copy(),
+                feature_mode=feature_mode,
+                norm_mode=norm_mode,
+                n_conditions=FD_CONFIGS[fd_name]["n_conditions"],
+                seed=seed,
+            )
+
+            selected_units = filter_cmapss_unit_ids(
+                te_df["unit"].unique().tolist(),
+                entry.get("unit_ids"),
+            )
+            max_sections = entry.get("max_sections")
+            count = 0
+            for uid in selected_units:
+                sub = te_df[te_df["unit"] == uid]
+                x = sub[feature_cols].to_numpy(np.float32)
+                if len(x) == 0:
+                    continue
+                if len(x) >= window_size:
+                    window = x[-window_size:]
+                else:
+                    pad = np.repeat(x[:1], window_size - len(x), axis=0)
+                    window = np.concatenate([pad, x], axis=0)
+                yield {
+                    "fd_name": fd_name,
+                    "payload": window.tolist(),
+                    "unit": int(uid),
+                    "end_index": int(len(x) - 1),
+                }
+                count += 1
+                if max_sections is not None and count >= max_sections:
+                    break
+
+
 class SequentialReplayPipeline(ScenarioPipeline):
     """Replay sections against a KServe predictor at a fixed rate."""
 
@@ -220,6 +307,55 @@ class SequentialReplayPipeline(ScenarioPipeline):
             "request_count": len(records),
             "duration_seconds": time.time() - started,
             "interval_hz": interval_hz,
+            "endpoint": endpoint,
+            "requests": records,
+        }
+
+
+class TestEvaluationPipeline(ScenarioPipeline):
+    """Send each dataset section once to a KServe predictor and collect predictions.
+
+    No rate limiting — suited for test-set evaluation where throughput matters
+    and time-series streaming semantics are not required.
+    """
+
+    def __init__(self, config: Dict[str, Any]) -> None:
+        self._config = config
+
+    def run(
+        self,
+        dataset: DatasetSource,
+        *,
+        target: Dict[str, Any],
+        results_dir: str,
+        spec: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        timeout = int(self._config.get("request_timeout", 30))
+        service_url = target["service_url"].rstrip("/")
+        service_name = target["service_name"]
+        endpoint = f"{service_url}/v1/models/{service_name}:predict"
+
+        started = time.time()
+        records: List[Dict[str, Any]] = []
+        for index, section in enumerate(dataset.iter_sections(), start=1):
+            response = requests.post(
+                endpoint,
+                json={"instances": [section["payload"]]},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            body = response.json()
+            prediction = body.get("predictions", [])
+            records.append({
+                "index": index,
+                "fd_name": section.get("fd_name"),
+                "unit": section.get("unit"),
+                "end_index": section.get("end_index"),
+                "prediction": prediction[0] if prediction else None,
+            })
+        return {
+            "request_count": len(records),
+            "duration_seconds": time.time() - started,
             "endpoint": endpoint,
             "requests": records,
         }
@@ -369,6 +505,112 @@ class KeplerEnergyMetricCollector(MetricCollector):
         return response.json()["data"]["result"]
 
 
+def _resolve_data_dir_from_spec(spec: Dict[str, Any], config: Dict[str, Any]) -> Path:
+    """Resolve the C-MAPSS data directory from benchmark spec storage config."""
+    storage = spec["storage"]
+    configured_subpath = str(
+        config.get("data_subpath", "") or storage.get("data_subpath", "")
+    ).strip("/")
+    base_mount = Path(storage["data_mount_path"])
+    dataset_root = base_mount / configured_subpath if configured_subpath else base_mount
+    return Path(resolve_cmapss_data_dir(str(dataset_root)))
+
+
+class CmapssTestMetricCollector(MetricCollector):
+    """Score test-set RUL predictions using F1 and related binary classification metrics.
+
+    Expects scenario_result["requests"] to contain one record per test unit
+    (as produced by TestEvaluationPipeline + CmapssTestSetDatasetSource).
+    Loads ground-truth RUL from RUL_FDxxx.txt, applies a configurable threshold
+    (default 30 cycles) to convert regression values to binary labels
+    (RUL <= threshold → 1 "near failure", RUL > threshold → 0), then computes
+    F1, precision, recall, and accuracy via sklearn.
+    """
+
+    def __init__(self, config: Dict[str, Any]) -> None:
+        self._config = config
+
+    def start(
+        self,
+        *,
+        target: Dict[str, Any],
+        spec: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return {}
+
+    def finish(
+        self,
+        *,
+        target: Dict[str, Any],
+        spec: Dict[str, Any],
+        start_state: Dict[str, Any],
+        scenario_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        from sklearn.metrics import (
+            accuracy_score,
+            f1_score,
+            precision_score,
+            recall_score,
+        )
+        _ensure_model_package_on_path("mambasl-new")
+        from mambasl_new.cmapss.data import load_fd
+
+        rul_threshold = float(self._config.get("rul_threshold", 30.0))
+        average = self._config.get("average", "binary")
+        requests_list = scenario_result.get("requests") or []
+
+        # Build ground-truth map: (fd_name, unit_id) -> true RUL from RUL_FDxxx.txt
+        fd_names = {
+            rec.get("fd_name")
+            for rec in requests_list
+            if rec.get("fd_name") is not None
+        }
+        data_dir = _resolve_data_dir_from_spec(spec, self._config)
+        rul_map: Dict[Tuple[str, int], float] = {}
+        for fd_name in fd_names:
+            _, test_df, rul_test = load_fd(data_dir, fd_name)
+            unit_ids_sorted = sorted(test_df["unit"].unique().tolist())
+            for i, uid in enumerate(unit_ids_sorted):
+                rul_map[(fd_name, int(uid))] = float(rul_test[i])
+
+        y_true: List[int] = []
+        y_pred: List[int] = []
+        for rec in requests_list:
+            fd_name = rec.get("fd_name")
+            unit = rec.get("unit")
+            prediction = rec.get("prediction")
+            if fd_name is None or unit is None or prediction is None:
+                continue
+            gt = rul_map.get((fd_name, int(unit)))
+            if gt is None:
+                continue
+            y_true.append(1 if gt <= rul_threshold else 0)
+            y_pred.append(1 if float(prediction) <= rul_threshold else 0)
+
+        if not y_true:
+            return {
+                "f1_score": None,
+                "precision": None,
+                "recall": None,
+                "accuracy": None,
+                "n_evaluated": 0,
+                "rul_threshold": rul_threshold,
+                "average": average,
+                "error": "No valid prediction/ground-truth pairs found.",
+            }
+        return {
+            "f1_score": float(f1_score(y_true, y_pred, average=average, zero_division=0)),
+            "precision": float(precision_score(y_true, y_pred, average=average, zero_division=0)),
+            "recall": float(recall_score(y_true, y_pred, average=average, zero_division=0)),
+            "accuracy": float(accuracy_score(y_true, y_pred)),
+            "n_evaluated": len(y_true),
+            "n_positive": int(sum(y_true)),
+            "n_predicted_positive": int(sum(y_pred)),
+            "rul_threshold": rul_threshold,
+            "average": average,
+        }
+
+
 def resolve_scenario_definition(node: Dict[str, Any], spec: Dict[str, Any]) -> ScenarioDefinition:
     """Resolve an inline or embedded scenario definition."""
     if node.get("type") == "python-ref":
@@ -386,6 +628,8 @@ def resolve_dataset(node: Dict[str, Any], spec: Dict[str, Any]) -> DatasetSource
     config = dict(node.get("config", {}))
     if kind == "cmapss-timeseries":
         return CmapssTimeseriesDatasetSource(spec, config)
+    if kind == "cmapss-test-set":
+        return CmapssTestSetDatasetSource(spec, config)
     raise KeyError(f"Unknown benchmark dataset kind '{kind}'.")
 
 
@@ -397,6 +641,8 @@ def resolve_pipeline(node: Dict[str, Any], spec: Dict[str, Any]) -> ScenarioPipe
     config = dict(node.get("config", {}))
     if kind == "sequential-replay":
         return SequentialReplayPipeline(config)
+    if kind == "test-eval":
+        return TestEvaluationPipeline(config)
     raise KeyError(f"Unknown benchmark pipeline kind '{kind}'.")
 
 
@@ -411,6 +657,9 @@ def resolve_metric_collectors(nodes: List[Dict[str, Any]], spec: Dict[str, Any])
         config = dict(node.get("config", {}))
         if kind == "kepler-energy":
             collectors.append(KeplerEnergyMetricCollector(config))
+            continue
+        if kind == "cmapss-test":
+            collectors.append(CmapssTestMetricCollector(config))
             continue
         raise KeyError(f"Unknown benchmark metric kind '{kind}'.")
     return ensure_metric_collectors(collectors)

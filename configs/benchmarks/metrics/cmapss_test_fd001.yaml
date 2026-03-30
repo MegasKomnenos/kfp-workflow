@@ -1,0 +1,4 @@
+kind: cmapss-test
+config:
+  rul_threshold: 30
+  average: binary
