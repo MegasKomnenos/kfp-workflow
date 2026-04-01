@@ -598,7 +598,21 @@ class MRHySPCmapssPlugin(ModelPlugin):
         model_path: str,
         model_config: Dict[str, Any],
     ) -> Any:
+        import sys
+        import types
+
         import joblib
+
+        # Pickle compatibility shim: aeon renamed _multirocket_multivariate to
+        # _multirocket and dropped MultiRocketMultivariate in favour of MultiRocket.
+        # Models pickled against older aeon (<1.0) record the old qualified name;
+        # registering the shim before joblib.load lets Python resolve the class.
+        _LEGACY = "aeon.transformations.collection.convolution_based._multirocket_multivariate"
+        if _LEGACY not in sys.modules:
+            from aeon.transformations.collection.convolution_based import MultiRocket
+            _shim = types.ModuleType(_LEGACY)
+            _shim.MultiRocketMultivariate = MultiRocket  # type: ignore[attr-defined]
+            sys.modules[_LEGACY] = _shim
 
         return joblib.load(model_path)
 

@@ -1,0 +1,32 @@
+profile: aggressive
+parameters:
+  - name: d_model
+    type: categorical
+    values: [32, 64, 128]
+  - name: d_ff
+    type: categorical
+    values: [128, 256, 512]
+  - name: e_layers
+    type: categorical
+    values: [1, 2, 3, 4]
+  - name: channel_independence
+    type: categorical
+    values: [0, 1]
+  - name: down_sampling_layers
+    type: categorical
+    values: [1, 2, 3]
+  - name: down_sampling_window
+    type: categorical
+    values: [2, 3]
+  - name: down_sampling_method
+    type: categorical
+    values: [avg, max, conv]
+  - name: decomp_method
+    type: categorical
+    values: [moving_avg, dft_decomp]
+  - name: moving_avg
+    type: categorical
+    values: [13, 25]
+  - name: top_k
+    type: categorical
+    values: [3, 5, 7]

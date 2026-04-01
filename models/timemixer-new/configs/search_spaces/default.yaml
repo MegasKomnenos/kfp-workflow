@@ -1,0 +1,23 @@
+profile: default
+parameters:
+  - name: d_model
+    type: categorical
+    values: [32, 64, 128]
+  - name: d_ff
+    type: categorical
+    values: [128, 256, 512]
+  - name: e_layers
+    type: categorical
+    values: [1, 2, 3]
+  - name: channel_independence
+    type: categorical
+    values: [0, 1]
+  - name: down_sampling_layers
+    type: categorical
+    values: [1, 2]
+  - name: down_sampling_window
+    type: categorical
+    values: [2, 3]
+  - name: decomp_method
+    type: categorical
+    values: [moving_avg, dft_decomp]
