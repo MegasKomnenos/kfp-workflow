@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from kfp_workflow.cli.main import app
 from kfp_workflow.specs import SearchParamSpec, TuneSpec
-from kfp_workflow.tune.katib import build_katib_experiment
+from kfp_workflow.tune.katib import build_katib_experiment, _trial_parameters_json
 
 
 runner = CliRunner()
@@ -66,6 +66,8 @@ def test_build_katib_experiment_references_trial_parameters():
         SearchParamSpec(name="lr", type="log_float", low=1e-4, high=1e-2),
     ]
 
+    trial_params_env_value = _trial_parameters_json(search_space)
+
     manifest = build_katib_experiment(
         spec,
         search_space,
@@ -76,31 +78,38 @@ def test_build_katib_experiment_references_trial_parameters():
             "kfp_workflow.cli.main",
             "tune",
             "trial",
-            "--spec-json",
-            spec.model_dump_json(),
             "--data-mount-path",
             spec.storage.data_mount_path,
         ],
+        trial_env={
+            "KFP_WORKFLOW_TUNE_SPEC_JSON": spec.model_dump_json(),
+            "KFP_WORKFLOW_TUNE_TRIAL_PARAMS_JSON": trial_params_env_value,
+        },
     )
 
     container = manifest["spec"]["trialTemplate"]["trialSpec"]["spec"]["template"]["spec"]["containers"][0]
-    command = container["command"]
-    params_json = command[command.index("--trial-params-json") + 1]
+    env_map = {e["name"]: e.get("value") for e in container["env"]}
 
     assert manifest["spec"]["metricsCollectorSpec"] == {"collector": {"kind": "StdOut"}}
     assert manifest["spec"]["trialTemplate"]["successCondition"] == 'status.conditions.#(type=="Complete")#'
     assert manifest["metadata"]["annotations"]["sidecar.istio.io/inject"] == "false"
     assert manifest["metadata"]["labels"]["kfp-workflow/type"] == "tune"
     assert "kfp-workflow/spec-json" in manifest["metadata"]["annotations"]
-    assert json.loads(params_json) == {
+    # JSON payloads are now passed via env vars, not command args
+    assert json.loads(env_map["KFP_WORKFLOW_TUNE_TRIAL_PARAMS_JSON"]) == {
         "d_model": "${trialParameters.d_model}",
         "lr": "${trialParameters.lr}",
     }
+    assert env_map["KFP_WORKFLOW_TUNE_SPEC_JSON"] == spec.model_dump_json()
     assert container["volumeMounts"][0]["mountPath"] == "/mnt/data"
     assert container["volumeMounts"][2]["mountPath"] == "/mnt/tune-results"
     assert container["env"][0]["name"] == "KFP_WORKFLOW_TUNE_TRIAL_NAME"
     assert manifest["spec"]["trialTemplate"]["trialSpec"]["spec"]["template"]["spec"]["volumes"][2]["persistentVolumeClaim"]["claimName"] == "tune-store"
     assert "nvidia.com/gpu" not in container["resources"]["requests"]
+    # Command should NOT contain --spec-json or --trial-params-json
+    command = container["command"]
+    assert "--spec-json" not in command
+    assert "--trial-params-json" not in command
 
 
 def test_tune_trial_coerces_katib_params_and_emits_objective(monkeypatch):

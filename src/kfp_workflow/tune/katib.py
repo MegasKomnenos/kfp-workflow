@@ -72,6 +72,7 @@ def build_katib_experiment(
     search_space: List[SearchParamSpec],
     trial_image: str,
     trial_command: List[str],
+    trial_env: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     """Build a complete Katib Experiment CRD manifest.
 
@@ -84,18 +85,27 @@ def build_katib_experiment(
     trial_image:
         Container image used for each trial Job.
     trial_command:
-        Command + args for the trial container.  Katib will append
-        ``--<name>=<value>`` flags for each search parameter.
+        Command + args for the trial container.
+    trial_env:
+        Extra environment variables for the trial container.  JSON
+        payloads should be passed here rather than on the command line
+        because the Katib metrics-collector webhook wraps the container
+        command with ``sh -c``, which destroys un-quoted JSON.
     """
+    env: List[Dict[str, Any]] = [
+        {
+            "name": "KFP_WORKFLOW_TUNE_TRIAL_NAME",
+            "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}},
+        },
+    ]
+    for key, value in (trial_env or {}).items():
+        env.append({"name": key, "value": value})
+
     container: Dict[str, Any] = {
         "name": "training-container",
         "image": trial_image,
         "imagePullPolicy": spec.runtime.image_pull_policy,
-        "command": [
-            *trial_command,
-            "--trial-params-json",
-            _trial_parameters_json(search_space),
-        ],
+        "command": list(trial_command),
         "resources": {
             "requests": {
                 "cpu": spec.runtime.resources.cpu_request,
@@ -121,12 +131,7 @@ def build_katib_experiment(
                 "mountPath": spec.storage.results_mount_path,
             },
         ],
-        "env": [
-            {
-                "name": "KFP_WORKFLOW_TUNE_TRIAL_NAME",
-                "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}},
-            },
-        ],
+        "env": env,
     }
     if spec.runtime.use_gpu:
         container["resources"]["requests"]["nvidia.com/gpu"] = (

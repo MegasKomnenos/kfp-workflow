@@ -1783,7 +1783,10 @@ def cmd_tune_katib(
     from kfp_workflow.specs import load_tune_spec_with_overrides
     from kfp_workflow.tune.history import get_tune_experiment, is_tune_experiment
     from kfp_workflow.tune.engine import resolve_search_space
-    from kfp_workflow.tune.katib import build_katib_experiment
+    from kfp_workflow.tune.katib import (
+        build_katib_experiment,
+        _trial_parameters_json,
+    )
 
     loaded = load_tune_spec_with_overrides(spec, set_values or None)
     _validate_plugin_config_or_exit(loaded.model_dump())
@@ -1793,17 +1796,26 @@ def cmd_tune_katib(
     trial_command = [
         "python", "-m", "kfp_workflow.cli.main",
         "tune", "trial",
-        "--spec-json", loaded.model_dump_json(),
         "--data-mount-path", loaded.storage.data_mount_path,
         "--experiment-name", loaded.metadata.name,
         "--namespace", loaded.runtime.namespace,
         "--results-mount-path", loaded.storage.results_mount_path,
     ]
+    # Pass JSON payloads via environment variables instead of CLI args.
+    # The Katib metrics-collector webhook wraps the container command
+    # with ``sh -c``, which destroys un-quoted JSON on the command line.
+    trial_env = {
+        "KFP_WORKFLOW_TUNE_SPEC_JSON": loaded.model_dump_json(),
+        "KFP_WORKFLOW_TUNE_TRIAL_PARAMS_JSON": _trial_parameters_json(
+            search_space,
+        ),
+    }
     manifest = build_katib_experiment(
         loaded,
         search_space,
         trial_image=loaded.runtime.image,
         trial_command=trial_command,
+        trial_env=trial_env,
     )
 
     manifest_yaml = pyyaml.dump(manifest, default_flow_style=False, sort_keys=False)
@@ -1865,9 +1877,13 @@ def cmd_tune_katib(
 
 @tune_app.command("trial", hidden=True)
 def cmd_tune_trial(
-    spec_json: str = typer.Option(..., help="Serialized tune spec JSON."),
+    spec_json: str = typer.Option(
+        "", envvar="KFP_WORKFLOW_TUNE_SPEC_JSON",
+        help="Serialized tune spec JSON.",
+    ),
     trial_params_json: str = typer.Option(
-        ..., help="Serialized Katib trial parameter assignments.",
+        "", envvar="KFP_WORKFLOW_TUNE_TRIAL_PARAMS_JSON",
+        help="Serialized Katib trial parameter assignments.",
     ),
     data_mount_path: str = typer.Option(
         "/mnt/data", help="Path where the data PVC is mounted.",
@@ -1890,6 +1906,13 @@ def cmd_tune_trial(
     from kfp_workflow.specs import TuneSpec
     from kfp_workflow.tune.exceptions import TrialPruned
     from kfp_workflow.tune.results import persist_trial_result
+
+    if not spec_json:
+        typer.echo("Error: --spec-json or KFP_WORKFLOW_TUNE_SPEC_JSON required.", err=True)
+        raise typer.Exit(code=1)
+    if not trial_params_json:
+        typer.echo("Error: --trial-params-json or KFP_WORKFLOW_TUNE_TRIAL_PARAMS_JSON required.", err=True)
+        raise typer.Exit(code=1)
 
     loaded = TuneSpec.model_validate_json(spec_json)
     _validate_plugin_config_or_exit(loaded.model_dump())

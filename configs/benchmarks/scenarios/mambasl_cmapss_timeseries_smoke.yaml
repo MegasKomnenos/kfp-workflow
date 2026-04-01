@@ -8,7 +8,7 @@ dataset:
           - 1
           - 2
           - 3
-        max_sections: 5
+        max_sections: 50
     feature_mode: settings_plus_sensors
     norm_mode: condition_minmax
 pipeline:
