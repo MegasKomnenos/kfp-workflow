@@ -94,17 +94,59 @@ def resolve_search_space(
     plugin: "ModelPlugin",
     spec_dict: Dict[str, Any],
 ) -> List[SearchParamSpec]:
-    """Resolve the final search space.
+    """Resolve the final search space with composable layering.
 
-    If the spec contains an explicit ``hpo.search_space`` list, validate and
-    return it directly.  Otherwise delegate to the plugin's builtin profiles.
+    Resolution order:
+
+    1. If ``hpo.search_space`` is non-empty, use it as the base.
+       Otherwise delegate to the plugin's builtin profile.
+    2. Apply ``hpo.overrides`` — match by param name, merge fields.
+    3. Remove params listed in ``hpo.exclude``.
+    4. Append params from ``hpo.extra``.
+
+    When none of ``overrides``, ``exclude``, or ``extra`` are present this
+    behaves identically to the original all-or-nothing logic.
     """
     hpo = spec_dict.get("hpo", {})
+
+    # Step 1: base space
     custom_raw = hpo.get("search_space", [])
     if custom_raw:
-        return [SearchParamSpec.model_validate(p) for p in custom_raw]
-    profile = hpo.get("builtin_profile", "default")
-    return plugin.hpo_search_space(spec_dict, profile)
+        base = [SearchParamSpec.model_validate(p) for p in custom_raw]
+    else:
+        profile = hpo.get("builtin_profile", "default")
+        base = plugin.hpo_search_space(spec_dict, profile)
+
+    overrides = hpo.get("overrides", {})
+    exclude = set(hpo.get("exclude", []))
+    extra_raw = hpo.get("extra", [])
+
+    # Fast path: no composition needed
+    if not overrides and not exclude and not extra_raw:
+        return base
+
+    # Step 2: apply overrides
+    if overrides:
+        result = []
+        for param in base:
+            if param.name in overrides:
+                merged = param.model_dump()
+                merged.update(overrides[param.name])
+                result.append(SearchParamSpec.model_validate(merged))
+            else:
+                result.append(param)
+        base = result
+
+    # Step 3: exclude
+    if exclude:
+        base = [p for p in base if p.name not in exclude]
+
+    # Step 4: extra
+    if extra_raw:
+        for raw in extra_raw:
+            base.append(SearchParamSpec.model_validate(raw))
+
+    return base
 
 
 def run_hpo(

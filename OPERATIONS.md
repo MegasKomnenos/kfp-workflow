@@ -82,57 +82,68 @@ kfp-workflow pipeline run wait <run_id>
 ### Hyperparameter tuning
 ```bash
 # Preview the search space for a tuning spec
-kfp-workflow tune show-space --spec configs/tuning/mambasl_cmapss_tune.yaml
-kfp-workflow tune show-space --spec configs/tuning/softs_cmapss_tune.yaml
+kfp-workflow tune space --spec configs/tuning/mambasl_cmapss_tune.yaml
+kfp-workflow tune space --spec configs/tuning/softs_cmapss_tune.yaml
 
 # Use the aggressive profile
-kfp-workflow tune show-space --spec configs/tuning/mambasl_cmapss_tune.yaml \
-  --set hpo.builtin_profile=aggressive
-kfp-workflow tune show-space --spec configs/tuning/softs_cmapss_tune.yaml \
+kfp-workflow tune space --spec configs/tuning/mambasl_cmapss_tune.yaml \
   --set hpo.builtin_profile=aggressive
 
-# Run local HPO (Optuna)
-kfp-workflow tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
-  --set hpo.max_trials=20 --set hpo.algorithm=tpe \
-  --data-mount-path ./data \
-  --output results/best_params.json
-
-kfp-workflow tune run --spec configs/tuning/softs_cmapss_tune.yaml \
-  --set hpo.max_trials=20 --set hpo.algorithm=tpe \
-  --data-mount-path ./data \
-  --output results/softs_best_params.json
-
-# Quick smoke test (2 trials, 2 epochs)
-kfp-workflow tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
-  --set hpo.max_trials=2 --set train.max_epochs=2 \
-  --data-mount-path ./data
-
-# Generate Katib manifest for distributed HPO
-kfp-workflow tune katib --spec configs/tuning/mambasl_cmapss_tune.yaml --dry-run
-kfp-workflow tune katib --spec configs/tuning/softs_cmapss_tune.yaml --dry-run
-
-# Bootstrap tune result storage before Katib
+# Bootstrap tune result storage before submitting
 kfp-workflow cluster bootstrap \
   --type tune \
   --spec configs/tuning/mambasl_cmapss_tune.yaml
 
-# Submit Katib experiment to cluster
-kfp-workflow tune katib --spec configs/tuning/mambasl_cmapss_tune.yaml
-kfp-workflow tune katib --spec configs/tuning/softs_cmapss_tune.yaml
+# Submit Katib experiment (each submission gets a unique ID)
+kfp-workflow tune --spec configs/tuning/mambasl_cmapss_tune.yaml
+kfp-workflow tune --spec configs/tuning/softs_cmapss_tune.yaml
 
-# Inspect and download persisted Katib results
-kfp-workflow tune list
-kfp-workflow tune get mambasl-cmapss-hpo
-kfp-workflow tune download mambasl-cmapss-hpo
+# Submit and wait for completion
+kfp-workflow tune --spec configs/tuning/mambasl_cmapss_tune.yaml --wait
 
-# Katib trial pods run the internal shared executor:
-# kfp-workflow tune trial --spec-json ... --trial-params-json ...
-# Objective metrics must be printed to stdout as objective=<value>.
-# Trial payloads and the aggregated results.json are stored on storage.results_pvc.
+# Dry-run: preview manifest without submitting
+kfp-workflow tune --spec configs/tuning/mambasl_cmapss_tune.yaml --dry-run
+
+# Override search space via composable fields
+kfp-workflow tune --spec configs/tuning/mambasl_cmapss_tune.yaml \
+  --set hpo.overrides.lr.low=1e-5 \
+  --set hpo.overrides.lr.high=1e-1 \
+  --set hpo.exclude='[weight_decay]'
+
+# Check experiment status (list all, or by ID/prefix)
+kfp-workflow tune status
+kfp-workflow tune status mambasl-cmapss-hpo-a3f8
+
+# Download results (uses Katib API by default; --from-pvc for PVC fallback)
+kfp-workflow tune results mambasl-cmapss-hpo-a3f8
+
+# Download results and merge best params into a pipeline spec
+kfp-workflow tune results mambasl-cmapss-hpo-a3f8 \
+  --apply-best configs/pipelines/mambasl_cmapss_smoke.yaml
+
+# View trial logs (failed trials by default; --all for all)
+kfp-workflow tune logs mambasl-cmapss-hpo-a3f8
+kfp-workflow tune logs mambasl-cmapss-hpo-a3f8 --all --tail 100
 
 # JSON output for scripting
-kfp-workflow --json tune run --spec configs/tuning/mambasl_cmapss_tune.yaml \
-  --set hpo.max_trials=5 --data-mount-path ./data
+kfp-workflow --json tune status
+kfp-workflow --json tune results mambasl-cmapss-hpo-a3f8
+
+# Compact YAML search space syntax (in tune spec files):
+# hpo:
+#   search_space:
+#     - lr: log_float(1e-4, 1e-2)
+#     - d_model: categorical(32, 64, 128)
+#     - dropout: float(0.0, 0.5, step=0.05)
+#
+# Composable search spaces (start from builtin, tweak):
+# hpo:
+#   builtin_profile: default
+#   overrides:
+#     lr: { low: 1e-5, high: 1e-1 }
+#   exclude: [weight_decay]
+#   extra:
+#     - scheduler_gamma: float(0.9, 0.999)
 ```
 
 ## Docker Build

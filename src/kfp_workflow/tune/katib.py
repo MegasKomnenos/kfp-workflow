@@ -73,6 +73,8 @@ def build_katib_experiment(
     trial_image: str,
     trial_command: List[str],
     trial_env: Dict[str, str] | None = None,
+    *,
+    experiment_name: str | None = None,
 ) -> Dict[str, Any]:
     """Build a complete Katib Experiment CRD manifest.
 
@@ -91,6 +93,11 @@ def build_katib_experiment(
         payloads should be passed here rather than on the command line
         because the Katib metrics-collector webhook wraps the container
         command with ``sh -c``, which destroys un-quoted JSON.
+    experiment_name:
+        Unique Katib Experiment name.  When *None* (legacy behaviour)
+        falls back to ``spec.metadata.name``.  Callers should pass a
+        name with a unique suffix (e.g. ``mambasl-cmapss-hpo-a3f8b2c1``)
+        so that each submission creates a new experiment.
     """
     env: List[Dict[str, Any]] = [
         {
@@ -141,11 +148,13 @@ def build_katib_experiment(
             spec.runtime.resources.gpu_limit
         )
 
+    effective_name = experiment_name or spec.metadata.name
+
     return {
         "apiVersion": "kubeflow.org/v1beta1",
         "kind": "Experiment",
         "metadata": {
-            "name": spec.metadata.name,
+            "name": effective_name,
             "namespace": spec.runtime.namespace,
             "labels": {
                 "app.kubernetes.io/managed-by": "kfp-workflow",
@@ -154,6 +163,7 @@ def build_katib_experiment(
             "annotations": {
                 "sidecar.istio.io/inject": "false",
                 "kfp-workflow/spec-json": spec.model_dump_json(),
+                "kfp-workflow/tune-name": spec.metadata.name,
             },
         },
         "spec": {

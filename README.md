@@ -85,12 +85,11 @@ kfp-workflow registry dataset get       --name <n> [--version] [--registry-path]
 kfp-workflow registry dataset list      [--registry-path]
 
 # Hyperparameter tuning
-kfp-workflow tune run            --spec <path> [--set key=value ...] [--data-mount-path] [--output]
-kfp-workflow tune katib          --spec <path> [--set key=value ...] [--dry-run] [--output]
-kfp-workflow tune list           [--namespace]
-kfp-workflow tune get            <experiment_name> [--namespace]
-kfp-workflow tune download       <experiment_name> [--output <path>] [--namespace]
-kfp-workflow tune show-space     --spec <path> [--set key=value ...]
+kfp-workflow tune               --spec <path> [--set key=value ...] [--dry-run] [--output] [--wait]
+kfp-workflow tune status        [<experiment_name_or_prefix>] [--namespace]
+kfp-workflow tune results       <experiment_name_or_prefix> [--output <path>] [--namespace] [--from-pvc] [--apply-best <pipeline.yaml>]
+kfp-workflow tune space         --spec <path> [--set key=value ...]
+kfp-workflow tune logs          <experiment_name_or_prefix> [--namespace] [--all] [--trial <name>] [--tail N]
 
 # Infrastructure
 kfp-workflow cluster bootstrap  --spec <path> [--type {pipeline,benchmark,tune}] [--dry-run]

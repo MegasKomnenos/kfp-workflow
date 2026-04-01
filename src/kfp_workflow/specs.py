@@ -129,9 +129,102 @@ class PipelineSpec(SpecModel):
 
 SearchParamType = Literal["categorical", "int", "float", "log_float"]
 
+import re as _re
+
+_SHORTHAND_RE = _re.compile(
+    r"^(categorical|int|float|log_float)\((.+)\)$",
+    _re.DOTALL,
+)
+
+
+def _parse_shorthand(name: str, shorthand: str) -> Dict[str, Any]:
+    """Parse compact notation like ``log_float(1e-4, 1e-2)`` into a dict.
+
+    Supported forms:
+    - ``categorical(32, 64, 128)``
+    - ``int(1, 6)``  or ``int(1, 6, step=2)``
+    - ``float(0.0, 0.5)`` or ``float(0.0, 0.5, step=0.05)``
+    - ``log_float(1e-4, 1e-2)``
+    """
+    m = _SHORTHAND_RE.match(shorthand.strip())
+    if not m:
+        raise ValueError(
+            f"Invalid shorthand for param '{name}': {shorthand!r}.  "
+            f"Expected TYPE(args), e.g. log_float(1e-4, 1e-2)."
+        )
+    param_type = m.group(1)
+    args_str = m.group(2)
+
+    result: Dict[str, Any] = {"name": name, "type": param_type}
+
+    if param_type == "categorical":
+        values = []
+        for token in args_str.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            # Try numeric first
+            try:
+                values.append(int(token))
+                continue
+            except ValueError:
+                pass
+            try:
+                values.append(float(token))
+                continue
+            except ValueError:
+                pass
+            # Boolean
+            if token in ("True", "true"):
+                values.append(True)
+                continue
+            if token in ("False", "false"):
+                values.append(False)
+                continue
+            # String (strip quotes if present)
+            values.append(token.strip("'\""))
+        result["values"] = values
+    else:
+        # Positional: low, high; keyword: step=...
+        parts = [p.strip() for p in args_str.split(",") if p.strip()]
+        positional = []
+        for part in parts:
+            if "=" in part:
+                key, val = part.split("=", 1)
+                key = key.strip()
+                val = val.strip()
+                if key == "step":
+                    result["step"] = float(val)
+                else:
+                    raise ValueError(
+                        f"Unknown keyword arg '{key}' in shorthand for '{name}'."
+                    )
+            else:
+                positional.append(float(part))
+        if len(positional) != 2:
+            raise ValueError(
+                f"Expected (low, high) for {param_type} param '{name}', "
+                f"got {len(positional)} positional args."
+            )
+        result["low"] = positional[0]
+        result["high"] = positional[1]
+
+    return result
+
 
 class SearchParamSpec(SpecModel):
-    """A single hyperparameter search dimension."""
+    """A single hyperparameter search dimension.
+
+    Supports both verbose form::
+
+        {"name": "lr", "type": "log_float", "low": 1e-4, "high": 1e-2}
+
+    and compact shorthand (in YAML)::
+
+        lr: log_float(1e-4, 1e-2)
+
+    The shorthand is a single-key dict ``{name: "type(args)"}``.
+    """
 
     name: str
     type: SearchParamType
@@ -139,6 +232,20 @@ class SearchParamSpec(SpecModel):
     low: Optional[float] = None
     high: Optional[float] = None
     step: Optional[float] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _expand_shorthand(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        # Already has explicit 'name' + 'type' → verbose form, pass through
+        if "name" in data and "type" in data:
+            return data
+        # Single-key dict shorthand: {param_name: "type(args)"}
+        keys = [k for k in data if k not in ("name", "type", "values", "low", "high", "step")]
+        if len(keys) == 1 and isinstance(data[keys[0]], str):
+            return _parse_shorthand(keys[0], data[keys[0]])
+        return data
 
     @model_validator(mode="after")
     def _validate_shape(self) -> "SearchParamSpec":
@@ -152,7 +259,16 @@ class SearchParamSpec(SpecModel):
 
 
 class HpoSpec(SpecModel):
-    """Hyperparameter optimisation configuration."""
+    """Hyperparameter optimisation configuration.
+
+    Supports composable search spaces via ``overrides``, ``exclude``, and
+    ``extra`` fields.  When these are present the resolution order is:
+
+    1. Start from the plugin's builtin profile (or ``search_space`` if given).
+    2. Apply ``overrides`` — matched by param name, merges only specified fields.
+    3. Remove params listed in ``exclude``.
+    4. Append params from ``extra``.
+    """
 
     algorithm: Literal["random", "tpe", "grid"] = "tpe"
     max_trials: int = 20
@@ -160,6 +276,9 @@ class HpoSpec(SpecModel):
     parallel_trials: int = 1
     builtin_profile: Literal["default", "aggressive", "custom"] = "default"
     search_space: List[SearchParamSpec] = Field(default_factory=list)
+    overrides: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    exclude: List[str] = Field(default_factory=list)
+    extra: List[SearchParamSpec] = Field(default_factory=list)
 
 
 class TuneSpec(SpecModel):
@@ -364,3 +483,35 @@ def load_benchmark_spec_with_overrides(
 
         raw = apply_overrides(raw, overrides)
     return BenchmarkSpec.model_validate(raw)
+
+
+# ---------------------------------------------------------------------------
+# Best-params merging
+# ---------------------------------------------------------------------------
+
+_TRAIN_FIELDS = set(TrainSpec.model_fields.keys())
+
+
+def merge_best_params(
+    pipeline_raw: Dict[str, Any],
+    best_params: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Merge HPO best params into a pipeline spec dict.
+
+    Parameters that match ``TrainSpec`` field names (e.g. ``learning_rate``,
+    ``batch_size``) are placed under ``train``.  All other parameters are
+    placed under ``model.config``.  The merged dict is returned (not mutated
+    in place).
+    """
+    import copy
+    result = copy.deepcopy(pipeline_raw)
+    train = result.setdefault("train", {})
+    model_config = result.setdefault("model", {}).setdefault("config", {})
+
+    for key, value in best_params.items():
+        if key in _TRAIN_FIELDS:
+            train[key] = value
+        else:
+            model_config[key] = value
+
+    return result

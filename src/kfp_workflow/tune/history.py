@@ -23,6 +23,7 @@ from kfp_workflow.tune.results import (
 )
 
 _SPEC_ANNOTATION = "kfp-workflow/spec-json"
+_TUNE_NAME_ANNOTATION = "kfp-workflow/tune-name"
 _TYPE_LABEL = "kfp-workflow/type"
 _MANAGED_BY_LABEL = "app.kubernetes.io/managed-by"
 
@@ -112,6 +113,60 @@ def is_tune_experiment(experiment: Dict[str, Any]) -> bool:
     return extract_tune_spec(experiment) is not None
 
 
+def extract_tune_name(experiment: Dict[str, Any]) -> str:
+    """Return the logical tune name from the experiment annotation.
+
+    Falls back to the Katib experiment name when the annotation is absent
+    (backwards compatibility with experiments created before unique IDs).
+    """
+    metadata = experiment.get("metadata", {})
+    annotations = metadata.get("annotations", {}) or {}
+    tune_name = annotations.get(_TUNE_NAME_ANNOTATION)
+    if isinstance(tune_name, str) and tune_name:
+        return tune_name
+    # Fallback: try to extract from embedded spec
+    tune_spec = extract_tune_spec(experiment)
+    if tune_spec:
+        return tune_spec.get("metadata", {}).get("name", metadata.get("name", ""))
+    return metadata.get("name", "")
+
+
+def resolve_tune_experiment(
+    raw_id: str,
+    namespace: str,
+) -> Dict[str, Any]:
+    """Resolve a full experiment name or unique prefix to a single experiment.
+
+    Follows the same ID-prefix resolution pattern used by pipeline and
+    benchmark commands (``_resolve_unique_id_prefix`` in the CLI).
+    """
+    # Try exact match first
+    exact = get_tune_experiment(raw_id, namespace)
+    if exact and is_tune_experiment(exact):
+        return exact
+
+    # Prefix search
+    all_experiments = list_tune_experiments(namespace)
+    candidates = [
+        exp
+        for exp in all_experiments
+        if is_tune_experiment(exp)
+        and exp.get("metadata", {}).get("name", "").startswith(raw_id)
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise LookupError(
+            f"No tune experiment found matching ID or prefix '{raw_id}'."
+        )
+    preview = ", ".join(
+        c.get("metadata", {}).get("name", "")[:16] for c in candidates[:5]
+    )
+    raise LookupError(
+        f"ID prefix '{raw_id}' matches multiple tune experiments: {preview}"
+    )
+
+
 def summarize_result_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Return a compact summary from a stored tune result payload."""
     return {
@@ -134,6 +189,7 @@ def summarize_experiment(experiment: Dict[str, Any]) -> Dict[str, Any]:
     counts = _status_counts(status)
     return {
         "experiment_name": metadata.get("name", ""),
+        "tune_name": extract_tune_name(experiment),
         "state": _experiment_state(experiment),
         "created_at": metadata.get("creationTimestamp", ""),
         "finished_at": status.get("completionTime", ""),
@@ -146,17 +202,138 @@ def summarize_experiment(experiment: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def get_trial_details(
+    experiment_name: str,
+    namespace: str,
+) -> List[Dict[str, Any]]:
+    """Query Katib Trial CRDs directly for per-trial details.
+
+    Returns a list of dicts compatible with ``aggregate_experiment_results``'s
+    ``trial_payloads`` parameter, so results can be aggregated without
+    spinning up helper pods to read PVC files.
+    """
+    api = _custom_objects_api()
+    try:
+        result = api.list_namespaced_custom_object(
+            group="kubeflow.org",
+            version="v1beta1",
+            namespace=namespace,
+            plural="trials",
+            label_selector=f"katib.kubeflow.org/experiment={experiment_name}",
+        )
+    except Exception:
+        return []
+
+    trials: List[Dict[str, Any]] = []
+    for item in result.get("items", []):
+        metadata = item.get("metadata", {})
+        trial_name = metadata.get("name", "")
+        status_obj = item.get("status", {}) or {}
+
+        # Determine trial status from conditions
+        status = "failed"
+        for cond in reversed(status_obj.get("conditions", []) or []):
+            if str(cond.get("status", "")).lower() != "true":
+                continue
+            ctype = str(cond.get("type", "")).lower()
+            if ctype in ("succeeded", "complete", "completed"):
+                status = "completed"
+                break
+            if ctype in ("failed",):
+                status = "failed"
+                break
+
+        # Extract params from parameterAssignments
+        params = {}
+        for pa in status_obj.get("observation", {}).get("metrics", []) or []:
+            pass  # metrics handled below
+        for pa in item.get("spec", {}).get("parameterAssignments", []) or []:
+            pname = pa.get("name", "")
+            pvalue = pa.get("value", "")
+            if pname:
+                params[pname] = _coerce_trial_value(pvalue)
+
+        # Extract objective value from observation
+        objective_value = None
+        observation = status_obj.get("observation", {}) or {}
+        for metric in observation.get("metrics", []) or []:
+            if metric.get("name") == "objective":
+                try:
+                    objective_value = float(metric.get("latest", metric.get("value", "")))
+                except (TypeError, ValueError):
+                    pass
+                break
+
+        from kfp_workflow.tune.results import trial_number_from_name
+        trials.append({
+            "trial_name": trial_name,
+            "trial_number": trial_number_from_name(trial_name),
+            "status": status,
+            "params": params,
+            "objective_value": objective_value,
+        })
+
+    trials.sort(key=lambda t: t.get("trial_number") or 0)
+    return trials
+
+
+def _coerce_trial_value(value: str) -> Any:
+    """Best-effort coerce a Katib string value to Python type."""
+    if value.lower() in ("true",):
+        return True
+    if value.lower() in ("false",):
+        return False
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    return value
+
+
 def resolve_results(
     *,
     experiment: Dict[str, Any],
     tune_spec: Dict[str, Any],
     namespace: str,
+    from_pvc: bool = False,
 ) -> Dict[str, Any]:
-    """Locate, lazily aggregate, and read the stored tune results payload."""
+    """Locate, lazily aggregate, and read the stored tune results payload.
+
+    By default, queries Katib Trial CRDs directly (fast, no helper pod).
+    Falls back to PVC-based retrieval when the API approach fails or when
+    ``from_pvc=True`` is explicitly set.
+    """
     experiment_name = experiment.get("metadata", {}).get("name", "")
     pvc_name = tune_spec.get("storage", {}).get("results_pvc", "tune-store")
     result_path = str(experiment_results_path(tune_spec, experiment_name))
 
+    # Primary path: Katib API (unless explicitly requesting PVC)
+    if not from_pvc:
+        try:
+            trial_payloads = get_trial_details(experiment_name, namespace)
+            if trial_payloads:
+                payload = aggregate_experiment_results(
+                    spec=tune_spec,
+                    experiment_name=experiment_name,
+                    namespace=namespace,
+                    experiment_status=_experiment_state(experiment),
+                    created_at=experiment.get("metadata", {}).get("creationTimestamp", ""),
+                    completed_at=(experiment.get("status", {}) or {}).get("completionTime", ""),
+                    trial_payloads=trial_payloads,
+                )
+                return {
+                    "results_path": result_path,
+                    "payload": payload,
+                    "summary": summarize_result_payload(payload),
+                }
+        except Exception:
+            pass  # Fall through to PVC-based retrieval
+
+    # Fallback: PVC-based retrieval (helper pod)
     try:
         raw = _read_result_file(
             pvc_name=pvc_name,
@@ -306,6 +483,132 @@ def _experiment_state(experiment: Dict[str, Any]) -> str:
     if status.get("startTime"):
         return "RUNNING"
     return "PENDING"
+
+
+def list_trial_pods(
+    experiment_name: str,
+    namespace: str,
+) -> List[Dict[str, Any]]:
+    """Return trial pod summaries for a Katib experiment.
+
+    Each Katib trial creates a Job whose pods are labelled with
+    ``katib.kubeflow.org/experiment`` and ``katib.kubeflow.org/trial``.
+    """
+    v1 = _core_v1_api()
+    label_selector = f"katib.kubeflow.org/experiment={experiment_name}"
+    pod_list = v1.list_namespaced_pod(namespace=namespace, label_selector=label_selector)
+    results: List[Dict[str, Any]] = []
+    for pod in pod_list.items:
+        trial_name = (pod.metadata.labels or {}).get("katib.kubeflow.org/trial", "")
+        phase = pod.status.phase if pod.status else "Unknown"
+        results.append({
+            "pod_name": pod.metadata.name,
+            "trial_name": trial_name,
+            "phase": phase,
+        })
+    results.sort(key=lambda r: r["trial_name"])
+    return results
+
+
+def get_trial_logs(
+    experiment_name: str,
+    namespace: str,
+    *,
+    trial_name: Optional[str] = None,
+    failed_only: bool = True,
+    tail_lines: int = 50,
+) -> List[Dict[str, Any]]:
+    """Fetch logs for trial pods belonging to a Katib experiment.
+
+    Parameters
+    ----------
+    experiment_name:
+        The Katib Experiment resource name.
+    namespace:
+        Kubernetes namespace.
+    trial_name:
+        If given, fetch logs only for the matching trial.
+    failed_only:
+        When *True* (default), only return logs for non-Succeeded pods.
+    tail_lines:
+        Number of log lines to retrieve per pod.
+    """
+    v1 = _core_v1_api()
+    pods = list_trial_pods(experiment_name, namespace)
+
+    if trial_name:
+        pods = [p for p in pods if p["trial_name"] == trial_name]
+
+    if failed_only:
+        pods = [p for p in pods if p["phase"] != "Succeeded"]
+
+    entries: List[Dict[str, Any]] = []
+    for pod_info in pods:
+        try:
+            log_text = v1.read_namespaced_pod_log(
+                name=pod_info["pod_name"],
+                namespace=namespace,
+                tail_lines=tail_lines,
+            )
+        except Exception as exc:
+            log_text = f"<error reading logs: {exc}>"
+        entries.append({
+            "trial_name": pod_info["trial_name"],
+            "pod_name": pod_info["pod_name"],
+            "phase": pod_info["phase"],
+            "logs": log_text,
+        })
+    return entries
+
+
+def watch_experiment(
+    experiment_name: str,
+    namespace: str,
+    *,
+    poll_interval: int = 30,
+    timeout: int = 7200,
+    on_update: Any = None,
+) -> Dict[str, Any]:
+    """Poll a Katib experiment until it finishes or times out.
+
+    Parameters
+    ----------
+    experiment_name:
+        Katib Experiment name.
+    namespace:
+        Kubernetes namespace.
+    poll_interval:
+        Seconds between status checks.
+    timeout:
+        Maximum seconds to wait before raising ``TimeoutError``.
+    on_update:
+        Optional callable ``(summary_dict) -> None`` invoked on each poll
+        to allow the caller to display progress.
+
+    Returns the final experiment summary dict.
+    """
+    elapsed = 0
+    while elapsed < timeout:
+        experiment = get_tune_experiment(experiment_name, namespace)
+        if experiment is None:
+            raise LookupError(
+                f"Experiment '{experiment_name}' not found in namespace '{namespace}'."
+            )
+        summary = summarize_experiment(experiment)
+        state = summary.get("state", "PENDING")
+
+        if on_update is not None:
+            on_update(summary)
+
+        if state in ("SUCCEEDED", "FAILED"):
+            return summary
+
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+
+    raise TimeoutError(
+        f"Timed out after {timeout}s waiting for experiment '{experiment_name}'."
+    )
 
 
 def _read_result_file(
