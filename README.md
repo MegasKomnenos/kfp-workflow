@@ -29,6 +29,7 @@ The root plugin registry currently supports these model plugins:
 
 For the concise tree and documentation inventory, see [PROJECT.md](/home/scouter/proj_2026_1_etri/test/PROJECT.md).
 For day-to-day commands and operational procedures, see [OPERATIONS.md](/home/scouter/proj_2026_1_etri/test/OPERATIONS.md).
+For the exact public CLI hierarchy, see [CLI_COMMAND_TREE.md](/home/scouter/proj_2026_1_etri/test/CLI_COMMAND_TREE.md).
 
 ## Quick Start
 
@@ -48,6 +49,17 @@ kfp-workflow spec validate --spec configs/serving/mambasl_cmapss_serve.yaml --ty
 kfp-workflow spec validate --spec configs/tuning/mambasl_cmapss_tune.yaml --type tune
 kfp-workflow spec validate --spec configs/benchmarks/mambasl_cmapss_kepler_smoke.yaml --type benchmark
 ```
+
+## CLI Reference
+
+The canonical public command tree is maintained in [CLI_COMMAND_TREE.md](/home/scouter/proj_2026_1_etri/test/CLI_COMMAND_TREE.md).
+
+Use that file for:
+
+- exact command nesting
+- callback-style `tune` submission behavior
+- public versus intentionally undocumented hidden commands
+- key required args and high-signal options per command
 
 ## Core Workflows
 

@@ -2,6 +2,8 @@
 
 This document is the canonical command and procedure reference for the integrated root project.
 
+The exact public command hierarchy is maintained separately in [CLI_COMMAND_TREE.md](/home/scouter/proj_2026_1_etri/test/CLI_COMMAND_TREE.md). This file stays task-oriented and links to that tree instead of duplicating the full layer structure.
+
 ## Defaults
 
 | Key | Value |

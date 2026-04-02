@@ -10,6 +10,7 @@ test/
 ├── CLAUDE.md                # Alternate agent guidance
 ├── GEMINI.md                # Alternate agent guidance
 ├── README.md                # Root overview, supported workflows, navigation hub
+├── CLI_COMMAND_TREE.md      # Canonical public root CLI hierarchy and synopsis
 ├── PROJECT.md               # This maintained tree and component map
 ├── OPERATIONS.md            # Canonical local/cluster procedures
 ├── Makefile                 # Root setup, test, validation, compile helpers
@@ -56,6 +57,7 @@ test/
 ## Documentation Inventory
 
 - `README.md`: entry point for the integrated root project
+- `CLI_COMMAND_TREE.md`: canonical public `kfp-workflow` command hierarchy
 - `OPERATIONS.md`: repeatable procedures, command patterns, and deployment notes
 - `examples/README.md`: tutorial navigation in Korean
 - `models/*/README.md`: package-local overviews and current integration status

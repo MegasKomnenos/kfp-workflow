@@ -10,6 +10,7 @@
 루트 참조 문서:
 
 - [README.md](/home/scouter/proj_2026_1_etri/test/README.md)
+- [CLI_COMMAND_TREE.md](/home/scouter/proj_2026_1_etri/test/CLI_COMMAND_TREE.md)
 - [OPERATIONS.md](/home/scouter/proj_2026_1_etri/test/OPERATIONS.md)
 - [PROJECT.md](/home/scouter/proj_2026_1_etri/test/PROJECT.md)
 
