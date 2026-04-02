@@ -1,28 +1,53 @@
 # UI and Workflow Unification Audit
 
-This document records the operator-facing unification checklist between `multirocket-new` and `mambasl-new`.
+This note records the current operator-facing relationship between `multirocket-new` and the other maintained `*-new` packages.
 
-## Evaluation scale
+## Current Status
 
-- `Pass`: same operator-facing contract
-- `Partial`: same intent, but different visible behavior, wording, or artifact convention
-- `Fail`: missing or incompatible operator-facing behavior
+The packages are intentionally similar, but they are not fully uniform today.
 
-## Checklist and current status
+Shared package-local CLI families:
 
-- `Pass`: top-level CLI families match: `spec`, `train`, `report`, `pipeline`, `katib`, `cluster`
-- `Pass`: shared subcommands match: `spec validate`, `train run`, `train katib-trial`, `report summarize`, `pipeline compile`, `pipeline submit`, `katib render`, `katib submit`, `cluster bootstrap`
-- `Pass`: shared flag families match for workflow control: `--spec`, `--dataset`, `--output`, `--namespace`, `--host`, `--existing-token`, `--cookies`, `--dry-run`
-- `Pass`: canonical config layout matches: `configs/experiments/` and `configs/search_spaces/`
-- `Pass`: workflow stage names match: `hpo`, `final_train_eval`, `ablation_sweep`, `aggregate_reports`
-- `Pass`: pipeline submit flow matches: compile from spec, port-forward via runtime fields, optional auth overrides
-- `Pass`: Katib render and submit flow matches: render from spec, optional dry-run submit, shared stdout metrics contract
-- `Pass`: PVC bootstrap flow matches: spec-driven PVC names, sizes, mounts, optional seeding, dry-run manifest inspection
-- `Pass`: documented runbook order matches: validate, local run, compile and submit, bootstrap when PVC-backed, render or submit Katib
-- `Pass`: recommended compile artifact convention matches: `compiled/<spec-name>.yaml`
-- `Pass`: automated protocol coverage exists for schema loading, pipeline compilation, Katib manifest generation, and bootstrap dry-run
+- `spec`
+- `train`
+- `report`
+- `pipeline`
+- `katib`
 
-## Allowed differences
+Shared package-local commands across all maintained `*-new` packages:
 
-- Model-specific training fields under `train_defaults` and search-space contents differ by algorithm and are not counted against UI or workflow unification.
-- Resource defaults can differ when they do not change the operator workflow shape.
+- `spec validate`
+- `train run`
+- `train katib-trial`
+- `report summarize`
+- `pipeline compile`
+- `katib render`
+- `katib submit`
+
+`multirocket-new` currently exposes two additional standalone operational commands that the other maintained packages do not expose:
+
+- `pipeline submit`
+- `cluster bootstrap`
+
+## What Is Actually Unified
+
+- Experiment-spec layout is aligned around `configs/experiments/` and `configs/search_spaces/`.
+- The package-local Katib flow is aligned around `katib render` and `katib submit`.
+- The package-local compile artifact convention is aligned around explicit `--output` paths, typically under `compiled/`.
+- The root integrated workflow still uses the root `kfp-workflow` docs as the canonical source for integrated operation.
+
+## What Is Intentionally Different
+
+- `multirocket-new` can submit pipelines and bootstrap PVCs directly as a standalone package.
+- `mambasl-new`, `softs-new`, and `timemixer-new` stop at package-local compilation and Katib manifest handling.
+- Root integration is handled through root plugin adapters, not by trying to normalize all standalone package CLIs into one identical surface.
+
+## Maintenance Rule
+
+Treat this file as a factual status note, not as a target-state guarantee.
+
+If package-local CLIs converge or diverge further, update:
+
+- [README.md](/home/scouter/proj_2026_1_etri/test/models/multirocket-new/README.md)
+- [OPERATIONS.md](/home/scouter/proj_2026_1_etri/test/models/multirocket-new/OPERATIONS.md)
+- this file

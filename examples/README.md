@@ -33,7 +33,7 @@
 | 01 | 설치 및 설정 | 로컬 개발 환경과 기본 검증 |
 | 02 | 스펙 파일 작성 및 검증 | `PipelineSpec`, `ServingSpec`, `TuneSpec`, `BenchmarkSpec` 사용법 |
 | 03 | 파이프라인 컴파일 및 제출 | 학습 파이프라인과 벤치마크 컴파일/제출 |
-| 04 | 파이프라인 실행 모니터링 | run/experiment 명령 사용법 |
+| 04 | 파이프라인 실행 모니터링 | 평탄화된 `pipeline get/list/wait/logs/terminate/list-experiments` 흐름 |
 | 05 | CLI 설정 오버라이드 | `--set` 패턴과 주의점 |
 | 06 | 서빙 배포 및 추론 | KServe 배포와 상태 점검 |
 | 07 | 레지스트리 관리 | 모델/데이터셋 레지스트리 흐름 |

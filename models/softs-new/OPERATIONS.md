@@ -26,6 +26,12 @@ make spec-validate
 make compile-pipeline
 ```
 
+Validate a package-local spec directly:
+
+```bash
+softs-new spec validate --spec configs/experiments/fd001_smoke.yaml
+```
+
 ## Local Training
 
 ```bash
