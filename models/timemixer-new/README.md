@@ -1,37 +1,61 @@
-# TimeMixer-New
+# timemixer-new
 
-ML model package for TimeMixer multi-scale mixing model on NASA C-MAPSS turbofan RUL prediction.
+`timemixer-new` is a standalone TimeMixer-based C-MAPSS workflow package.
 
-TimeMixer (ICLR 2024) decomposes time series into seasonal and trend components at multiple scales, then applies Past Decomposable Mixing (PDM) blocks that perform bottom-up seasonal mixing and top-down trend mixing. This package adapts TimeMixer for Remaining Useful Life regression on the C-MAPSS benchmark.
+## Current Status
 
-Consumed by the kfp-workflow plugin system via `kfp_workflow.plugins.timemixer_cmapss`. Pipeline submission and cluster bootstrap are handled by the parent kfp-workflow CLI.
+This package is maintained as a standalone package under `models/`, but it is not registered in the root `kfp-workflow` plugin registry in `src/kfp_workflow/plugins/__init__.py`.
 
-## Core Modules
+That means:
 
-- `src/timemixer_new/cmapss/` — Data loading, preprocessing, windowing, model definition, training, evaluation, reporting, HPO search spaces
-- `src/timemixer_new/timemixer_layers/` — TimeMixer architecture: multi-scale decomposition, embedding, PDM blocks
-- `src/timemixer_new/kubeflow/` — Katib experiment manifest construction, HPO+ablation KFP pipeline
-- `src/timemixer_new/cli/` — Container-internal CLI for Katib trial execution and local training
-- `src/timemixer_new/specs.py` — Pydantic experiment spec models
+- you can use `timemixer-new` directly as a package-local CLI
+- you cannot currently reference `timemixer-new` from a root `kfp-workflow` pipeline, serving, tune, or benchmark spec without adding a root plugin adapter first
 
-## Datasets
-
-NASA C-MAPSS FD001, FD002, FD003, FD004 — turbofan engine degradation simulation.
-
-## CLI Commands (container-internal / local development)
-
-```
-timemixer-new spec validate       --spec <path>
-timemixer-new train run           --spec <path> [--dataset] [--output-dir] [--params-json] [--run-hpo] [--run-ablations]
-timemixer-new train katib-trial   --spec <path> --dataset <fd> --trial-params-json <json>
-timemixer-new report summarize    --run-dir <path>
-timemixer-new pipeline compile    --spec <path> --output <path>
-timemixer-new katib render        --spec <path> --dataset <fd> [--output]
-timemixer-new katib submit        --spec <path> --dataset <fd> [--output] [--dry-run]
-```
-
-## Development
+## Quick Start
 
 ```bash
-make venv && make install && make test
+make venv
+make install
+make test
 ```
+
+Validate a spec:
+
+```bash
+timemixer-new spec validate --spec configs/experiments/fd001_smoke.yaml
+```
+
+Run local training:
+
+```bash
+timemixer-new train run \
+  --spec configs/experiments/fd001_smoke.yaml \
+  --dataset FD001
+```
+
+Compile a package-local pipeline:
+
+```bash
+timemixer-new pipeline compile \
+  --spec configs/experiments/fd_all_core_default.yaml \
+  --output compiled/fd_all_core_default.yaml
+```
+
+## CLI Surface
+
+Supported commands from `timemixer_new.cli.main`:
+
+- `timemixer-new spec validate`
+- `timemixer-new train run`
+- `timemixer-new train katib-trial`
+- `timemixer-new report summarize`
+- `timemixer-new pipeline compile`
+- `timemixer-new katib render`
+- `timemixer-new katib submit`
+
+## Reference Docs
+
+- [PROJECT.md](/home/scouter/proj_2026_1_etri/test/models/timemixer-new/PROJECT.md)
+- [OPERATIONS.md](/home/scouter/proj_2026_1_etri/test/models/timemixer-new/OPERATIONS.md)
+
+The legacy `TimeMixer/` directory at the repo root is separate from this package and should not be confused with the maintained `models/timemixer-new` workflow package.

@@ -1,76 +1,85 @@
-# OPERATIONS
+# Operations
+
+This document covers package-local workflows for `multirocket-new`.
 
 ## Defaults
 
-- Python target: `3.9+`
-- Default namespace: `kubeflow-user-example-com`
-- Expected control plane:
-  - Kubeflow Pipelines `2.15.0`
-  - Katib `0.19.0`
-- Canonical workflow input: a versioned experiment spec under `configs/experiments/`
+| Key | Value |
+|-----|-------|
+| Python | `>=3.10` |
+| Entry point | `multirocket-new` |
+| KFP SDK | `2.15.0` |
+| Default namespace in examples | `kubeflow-user-example-com` |
 
-## Common commands
+## Setup
 
 ```bash
+cd models/multirocket-new
+make venv
 make install
+```
+
+## Tests
+
+```bash
 make test
+```
+
+## Validation and Compilation
+
+```bash
 make spec-validate
 make compile-pipeline
 ```
 
-Validate an experiment:
+Equivalent direct commands:
 
 ```bash
-.venv/bin/multirocket-new spec validate --spec configs/experiments/fd_all_core_default.yaml
+multirocket-new spec validate --spec configs/experiments/fd_all_core_default.yaml
+
+multirocket-new pipeline compile \
+  --spec configs/experiments/fd_all_core_default.yaml \
+  --output compiled/fd_all_core_default.yaml
 ```
 
-Bootstrap PVC-backed storage from the spec:
+## Local Training
 
 ```bash
-.venv/bin/multirocket-new cluster bootstrap \
-  --spec configs/experiments/fd_all_core_default.yaml
-```
-
-Run one dataset locally from the canonical spec:
-
-```bash
-.venv/bin/multirocket-new train run \
+multirocket-new train run \
   --spec configs/experiments/fd001_smoke.yaml \
   --dataset FD001
 ```
 
-Compile and submit:
+## Package-Local Cluster Flow
+
+Bootstrap storage:
 
 ```bash
-.venv/bin/multirocket-new pipeline compile \
-  --spec configs/experiments/fd_all_core_default.yaml \
-  --output compiled/fd_all_core_default.yaml
-.venv/bin/multirocket-new pipeline submit \
+multirocket-new cluster bootstrap \
+  --spec configs/experiments/fd_all_core_default.yaml
+```
+
+Submit:
+
+```bash
+multirocket-new pipeline submit \
   --spec configs/experiments/fd_all_core_default.yaml \
   --namespace kubeflow-user-example-com
 ```
 
-Render and optionally submit Katib:
+Render or submit Katib:
 
 ```bash
-.venv/bin/multirocket-new katib render \
+multirocket-new katib render \
   --spec configs/experiments/fd_all_core_default.yaml \
   --dataset FD001
-.venv/bin/multirocket-new katib submit \
+
+multirocket-new katib submit \
   --spec configs/experiments/fd_all_core_default.yaml \
-  --dataset FD001 \
-  --dry-run
+  --dataset FD001
 ```
 
-## Runtime notes
+## Maintenance Notes
 
-- The default shared runtime model supports both `pipeline_root`-backed KFP execution and PVC-backed `/mnt/data` plus `/mnt/results` mounts.
-- If the KFP API is behind Dex or auth headers, use `pipeline submit --existing-token ...` or `pipeline submit --cookies ...`.
-- Katib trials emit the shared stdout metrics protocol: `objective`, `rmse`, `score`, and `mae`.
-- Local smoke specs can run from downloaded local data, while the default and aggressive specs assume PVC-backed cluster execution.
-
-## Maintenance
-
-- Keep `configs/experiments/` and `configs/search_spaces/` aligned with the code-backed schema.
-- Keep `PROJECT.md` synchronized with the live tree after structural edits.
-- Prefer adding new control surfaces through the experiment spec instead of one-off CLI flags.
+- Keep this file aligned with [src/multirocket_new/cli/main.py](/home/scouter/proj_2026_1_etri/test/models/multirocket-new/src/multirocket_new/cli/main.py).
+- The integrated root workflow is documented at [README.md](/home/scouter/proj_2026_1_etri/test/README.md) and [OPERATIONS.md](/home/scouter/proj_2026_1_etri/test/OPERATIONS.md).

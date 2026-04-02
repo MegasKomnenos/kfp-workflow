@@ -1,159 +1,76 @@
 # Project Structure
 
-```
+This file is the maintained directory map for the root project. It is intentionally concise and focuses on the directories and files that a maintainer or operator is expected to use.
+
+## Root Tree
+
+```text
 test/
-├── .gitignore
-├── CLAUDE.md                          # AI agent directives
-├── AGENTS.md                          # AI agent directives
-├── Makefile                           # venv, install, test, compile, docker-build
-├── OPERATIONS.md                      # Operational patterns and procedures
-├── PROJECT.md                         # This file — directory inventory
-├── README.md                          # Project overview and quick start
-├── pyproject.toml                     # Build config, dependencies, entry points
-│
-├── configs/
-│   ├── benchmarks/
-│   │   ├── mambasl_cmapss_kepler_smoke.yaml         # Benchmark spec: deploy MambaSL, replay C-MAPSS, collect Kepler energy
-│   │   ├── mambasl_cmapss_test.yaml                 # Benchmark spec: deploy MambaSL, FD001 test-set eval, collect F1/precision/recall/accuracy
-│   │   ├── scenarios/
-│   │   │   ├── mambasl_cmapss_timeseries_smoke.yaml # Scenario ref: FD001 multi-unit 1 Hz replay (5 sections)
-│   │   │   └── mambasl_cmapss_test_fd001.yaml       # Scenario ref: FD001 full test-set, last-window per unit, test-eval pipeline
-│   │   └── metrics/
-│   │       ├── kepler_predictor_energy.yaml         # Metric ref: Kepler predictor-container energy collector
-│   │       └── cmapss_test_fd001.yaml               # Metric ref: C-MAPSS test-set F1 / precision / recall / accuracy (threshold 30)
-│   ├── pipelines/
-│   │   ├── sample_train.yaml          # Example training pipeline spec
-│   │   ├── mambasl_cmapss_smoke.yaml  # MambaSL C-MAPSS smoke test (2 epochs, CPU)
-│   │   ├── mrhysp_cmapss_smoke.yaml   # MR-HY-SP C-MAPSS smoke test (minimal kernels, CPU)
-│   │   └── softs_cmapss_smoke.yaml    # SOFTS C-MAPSS smoke test (2 epochs, CPU, d_core=16)
-│   ├── tuning/
-│   │   ├── mambasl_cmapss_tune.yaml   # MambaSL C-MAPSS HPO tuning spec
-│   │   ├── mrhysp_cmapss_tune.yaml    # MR-HY-SP C-MAPSS HPO tuning spec
-│   │   └── softs_cmapss_tune.yaml     # SOFTS C-MAPSS HPO tuning spec (tpe, 20 trials)
-│   └── serving/
-│       ├── sample_serve.yaml          # Example KServe serving spec
-│       ├── mambasl_cmapss_serve.yaml  # MambaSL C-MAPSS custom predictor spec
-│       ├── mrhysp_cmapss_serve.yaml   # MR-HY-SP C-MAPSS custom predictor spec
-│       └── softs_cmapss_serve.yaml    # SOFTS C-MAPSS custom predictor spec
-│
+├── AGENTS.md                # Agent instructions for this repo
+├── CLAUDE.md                # Alternate agent guidance
+├── GEMINI.md                # Alternate agent guidance
+├── README.md                # Root overview, supported workflows, navigation hub
+├── PROJECT.md               # This maintained tree and component map
+├── OPERATIONS.md            # Canonical local/cluster procedures
+├── Makefile                 # Root setup, test, validation, compile helpers
+├── pyproject.toml           # Root package metadata and dependencies
 ├── docker/
-│   └── Dockerfile                     # Base image (PyTorch + CUDA + mamba_ssm + mambasl-new + multirocket-new + softs-new)
-│
-├── examples/                          # Korean-language tutorials and usage guides
-│   ├── README.md                      # Table of contents and learning order
-│   ├── 00_프로젝트_개요.md            # Project overview, philosophy, architecture
-│   ├── 01_설치_및_설정.md             # Installation and environment setup
-│   ├── 02_스펙_파일_작성_및_검증.md   # Pipeline/serving spec authoring and validation
-│   ├── 03_파이프라인_컴파일_및_제출.md # Pipeline compile, submit, and DAG overview
-│   ├── 04_파이프라인_실행_모니터링.md  # Run get/list/wait/terminate/logs
-│   ├── 05_CLI_설정_오버라이드.md       # --set flag, type coercion, plugin schemas
-│   ├── 06_서빙_배포_및_추론.md        # KServe InferenceService create/list/get/delete
-│   ├── 07_레지스트리_관리.md          # Model and dataset registry management
-│   ├── 08_클러스터_부트스트랩.md       # PVC provisioning via cluster bootstrap
-│   ├── 09_Docker_이미지_빌드.md       # Docker image build and optimization
-│   ├── 10_새_모델_플러그인_개발.md    # ModelPlugin ABC full implementation guide (architecture, stages, serving, HPO, testing)
-│   ├── 11_하이퍼파라미터_튜닝.md     # Optuna/Katib HPO execution and management
-│   └── 12_벤치마크_워크플로우.md     # BenchmarkSpec, scenario/metric refs, smoke benchmark execution
-│
+│   └── Dockerfile           # Unified workflow image used by root pipelines and serving
+├── configs/
+│   ├── pipelines/           # Training pipeline specs
+│   ├── serving/             # KServe serving specs
+│   ├── tuning/              # Katib tuning specs
+│   └── benchmarks/          # Benchmark specs plus reusable scenarios and metrics
+├── examples/
+│   ├── README.md            # Korean tutorial index and learning path
+│   └── *.md                 # Guided tutorials for install, specs, serving, tuning, benchmarks
 ├── kubeflow/
-│   └── pvc/
-│       ├── dataset-pvc.yaml           # Dataset PVC manifest
-│       └── model-pvc.yaml             # Model weights PVC manifest
-│
-├── models/
-│   ├── mambasl-new/                   # MambaSL model package (installed in Docker image)
-│   │   └── src/mambasl_new/
-│   │       ├── cmapss/                # C-MAPSS data, preprocessing, model, training
-│   │       ├── mamba_layers/          # Mamba_TimeVariant, PositionalEmbedding
-│   │       ├── kubeflow/              # Katib manifest construction, HPO pipeline
-│   │       └── cli/                   # Container-internal CLI (train, katib-trial)
-│   ├── multirocket-new/              # MR-HY-SP model package (installed in Docker image)
-│   │   └── src/multirocket_new/
-│   │       ├── cmapss.py              # C-MAPSS data loading, windowing, scaling
-│   │       ├── model.py               # MRHySPRegressor (HYDRA + MultiRocket + SPRocket + RidgeCV)
-│   │       ├── runner.py              # Experiment runner, metrics, batch prediction
-│   │       └── config.py              # ExperimentConfig, mr_num_kernels constraint
-│   └── softs-new/                    # SOFTS model package (installed in Docker image)
-│       ├── configs/
-│       │   ├── experiments/           # fd001_smoke, fd_all_core_{default,aggressive}.yaml
-│       │   └── search_spaces/         # default.yaml, aggressive.yaml (13 SOFTS params)
-│       └── src/softs_new/
-│           ├── softs_layers/          # Embed (DataEmbedding_inverted), Transformer_EncDec, softs
-│           ├── cmapss/                # model (SOFTSForRUL), train, search_space, experiment, re-exports
-│           ├── kubeflow/              # pipeline.py, katib.py
-│           ├── cli/                   # main.py (softs-new CLI)
-│           ├── specs.py               # Pydantic ExperimentSpec hierarchy
-│           └── utils.py               # YAML/JSON helpers
-│
+│   └── pvc/                 # Example PVC manifests
 ├── pipelines/
-│   └── README.md                      # Compiled YAML output (git-ignored)
-│
+│   └── README.md            # Generated pipeline output landing area
 ├── scripts/
-│   └── build_image.sh                 # Docker image build script
-│
-├── src/kfp_workflow/
-│   ├── __init__.py                    # Package root, __version__
-│   ├── config_override.py             # CLI --set override utilities (coerce, merge, validate)
-│   ├── specs.py                       # Pydantic config models (PipelineSpec, BenchmarkSpec, ServingSpec, TuneSpec)
-│   ├── utils.py                       # YAML/JSON I/O helpers
-│   ├── cli/
-│   │   ├── main.py                    # Typer CLI (pipeline, benchmark, serve, registry, cluster, spec, tune incl. hidden Katib trial runner)
-│   │   └── output.py                  # Rich-based structured output (tables, colors, JSON)
-│   ├── benchmark/
-│   │   ├── __init__.py
-│   │   ├── client.py                  # Benchmark compilation + submission
-│   │   ├── compiler.py                # Benchmark DAG assembly + KFP compilation
-│   │   ├── components.py              # Deploy / wait / run / cleanup benchmark KFP components
-│   │   ├── history.py                 # Benchmark run discovery, PVC result lookup, and download helpers
-│   │   ├── interfaces.py              # Standard dataset, scenario, and metric interfaces
-│   │   ├── materialize.py             # YAML/Python ref loading and benchmark spec materialization
-│   │   └── runtime.py                 # Built-in dataset sources, pipelines, and metric collectors (C-MAPSS replay, test-set eval, Kepler energy)
-│   ├── components/
-│   │   ├── __init__.py                # Re-exports all 5 component functions
-│   │   ├── load_data.py               # KFP component: load data via plugin
-│   │   ├── preprocess.py              # KFP component: preprocess via plugin
-│   │   ├── train.py                   # KFP component: train via plugin
-│   │   ├── evaluate.py                # KFP component: evaluate via plugin
-│   │   └── save_model.py              # KFP component: save weights via plugin
-│   ├── pipeline/
-│   │   ├── compiler.py                # Pipeline DAG assembly + KFP compilation
-│   │   ├── client.py                  # Pipeline compilation + submission
-│   │   └── connection.py              # Reusable kfp_connection() context manager
-│   ├── plugins/
-│   │   ├── __init__.py                # Plugin registry dict + get_plugin()
-│   │   ├── base.py                    # ModelPlugin ABC + result dataclasses + HPO contract
-│   │   ├── mambasl_cmapss.py          # MambaSL C-MAPSS adapter plugin (incl. HPO)
-│   │   ├── mrhysp_cmapss.py           # MR-HY-SP C-MAPSS adapter plugin (incl. HPO)
-│   │   └── softs_cmapss.py            # SOFTS C-MAPSS adapter plugin (incl. HPO)
-│   ├── tune/
-│   │   ├── __init__.py
-│   │   ├── exceptions.py              # TrialPruned exception (project-level, no Optuna leak)
-│   │   ├── engine.py                  # Optuna HPO engine (study, trial loop, suggest)
-│   │   ├── history.py                 # Katib experiment discovery and persisted tune result retrieval helpers
-│   │   ├── katib.py                   # Katib Experiment CRD manifest builder with shared trial-pod command wiring
-│   │   └── results.py                 # Tune result path/payload builders for per-trial and aggregated JSON artifacts
-│   ├── registry/
-│   │   ├── base.py                    # ABCs: ModelRegistryBase, DatasetRegistryBase
-│   │   ├── model_registry.py          # FileModelRegistry (JSON on PVC)
-│   │   └── dataset_registry.py        # PVCDatasetRegistry (JSON on PVC)
-│   └── serving/
-│       ├── __init__.py
-│       ├── kserve.py                  # KServe InferenceService CRUD + status via Kubernetes API (custom + standard)
-│       └── predictor.py               # Custom KServe predictor (plugin dispatch)
-│
-└── tests/
-    ├── test_benchmark_history.py      # Benchmark workflow classification and PVC result lookup tests
-    ├── test_benchmark_compile.py      # Benchmark materialization and compile tests
-    ├── test_benchmark_runtime.py      # Benchmark dataset, replay, metric, and result persistence tests
-    ├── test_specs.py                  # Spec loading and validation
-    ├── test_cli_protocol.py           # CLI command existence checks (all commands)
-    ├── test_cli_run_commands.py       # Mocked functional tests for run/serve/experiment commands
-    ├── test_config_override.py        # CLI --set override system tests
-    ├── test_output.py                 # Output formatting unit tests
-    ├── test_pipeline_compile.py       # Pipeline compilation verification
-    ├── test_registry.py               # File-backed registry CRUD tests
-    ├── test_plugin_system.py          # Plugin ABC, registry, _build_cfg tests
-    ├── test_spec_validate_cli.py      # Spec validate JSON/output/override regression tests
-    ├── test_tune_history.py           # Tune experiment history, CLI, and bootstrap regression tests
-    └── test_tune_katib.py             # Katib manifest + shared trial-runner regression tests
+│   └── build_image.sh       # Helper for container image builds
+├── src/
+│   └── kfp_workflow/
+│       ├── cli/             # Typer CLI and output formatting
+│       ├── pipeline/        # Training pipeline compile and submit logic
+│       ├── benchmark/       # Benchmark compile, runtime, history, result handling
+│       ├── components/      # KFP pipeline component entrypoints
+│       ├── plugins/         # Root-integrated model plugin adapters
+│       ├── tune/            # Search-space resolution, Katib manifests, result handling
+│       ├── serving/         # KServe CRUD and custom predictor
+│       ├── registry/        # Model and dataset registry implementations
+│       ├── config_override.py
+│       ├── specs.py
+│       └── utils.py
+├── models/
+│   ├── mambasl-new/         # Standalone MambaSL research package
+│   ├── multirocket-new/     # Standalone MR-HY-SP research package
+│   ├── softs-new/           # Standalone SOFTS research package
+│   └── timemixer-new/       # Standalone TimeMixer research package, not root-integrated yet
+├── results/                 # Example or collected result artifacts
+├── tests/                   # Root regression suite
+└── TimeMixer/               # Legacy upstream-style source snapshot, not root-maintained docs
 ```
+
+## Documentation Inventory
+
+- `README.md`: entry point for the integrated root project
+- `OPERATIONS.md`: repeatable procedures, command patterns, and deployment notes
+- `examples/README.md`: tutorial navigation in Korean
+- `models/*/README.md`: package-local overviews and current integration status
+- `models/*/PROJECT.md`: package-local tree summaries
+- `models/*/OPERATIONS.md`: package-local workflow guidance where maintained
+
+## Runtime and Code Boundaries
+
+- Root code under `src/kfp_workflow/` is the orchestration layer.
+- Model packages under `models/` own model-specific training logic, search spaces, and some package-local Kubeflow helpers.
+- Only the plugins explicitly registered in `src/kfp_workflow/plugins/__init__.py` are available to root specs.
+- Tutorial docs under `examples/` describe the root workflow, not every standalone package feature.
+
+## Generated or Secondary Areas
+
+- `pipelines/` holds compiled KFP YAML and should be treated as generated output.
+- `results/` contains result artifacts and examples, not source-of-truth configuration.
+- `TimeMixer/` is a separate legacy code drop and is not the maintained entrypoint for `models/timemixer-new`.

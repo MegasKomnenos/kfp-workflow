@@ -1,81 +1,69 @@
 # multirocket-new
 
-`multirocket-new` is a standalone Kubeflow-native repository for `aeon` MR-HY-SP experiments on NASA C-MAPSS FD001-FD004.
+`multirocket-new` is a standalone MR-HY-SP workflow package for NASA C-MAPSS experiments. Its architecture is intentionally close to the other `*-new` packages, but it also exposes package-local `pipeline submit` and `cluster bootstrap` commands.
 
-It now follows the same operator protocol as `mambasl-new`:
-- one canonical experiment spec under `configs/experiments/`
-- one top-level CLI with shared subcommands
-- the same stage names for HPO, final training, ablations, and report aggregation
-- the same hybrid runtime model for object-store pipeline roots plus optional PVC-backed data/results mounts
+The root project consumes the MR-HY-SP model through the `mrhysp-cmapss` plugin adapter, not by shelling out to this package CLI.
 
-## Quick start
+## Quick Start
 
 ```bash
 make venv
 make install
+make test
 make spec-validate
-make compile-pipeline
 ```
 
-Validate a spec:
+Validate an experiment:
 
 ```bash
-.venv/bin/multirocket-new spec validate --spec configs/experiments/fd001_smoke.yaml
+multirocket-new spec validate --spec configs/experiments/fd_all_core_default.yaml
 ```
 
-Run one fixed-configuration local training pass:
+Run one dataset locally:
 
 ```bash
-.venv/bin/multirocket-new train run \
+multirocket-new train run \
   --spec configs/experiments/fd001_smoke.yaml \
   --dataset FD001
 ```
 
-Compile the Kubeflow pipeline:
+Compile and submit:
 
 ```bash
-.venv/bin/multirocket-new pipeline compile \
+multirocket-new pipeline compile \
   --spec configs/experiments/fd_all_core_default.yaml \
   --output compiled/fd_all_core_default.yaml
-```
 
-Submit to Kubeflow:
-
-```bash
-.venv/bin/multirocket-new pipeline submit \
+multirocket-new pipeline submit \
   --spec configs/experiments/fd_all_core_default.yaml \
   --namespace kubeflow-user-example-com
 ```
 
-## Main interfaces
+## CLI Surface
 
-- `configs/experiments/*.yaml`: canonical experiment specs
-- `configs/search_spaces/*.yaml`: human-readable HPO profiles
-- `multirocket-new spec validate`: schema and consistency checks
-- `multirocket-new train run`: local fixed-config training/evaluation
-- `multirocket-new train katib-trial`: one Katib trial execution with concrete parameters
-- `multirocket-new pipeline compile|submit`: KFP v2 packaging and submission
-- `multirocket-new katib render|submit`: Katib manifest rendering and submission
-- `multirocket-new cluster bootstrap`: PVC creation and optional dataset seeding from the spec
-- `multirocket-new report summarize`: aggregate collected per-dataset results
+Supported commands from `multirocket_new.cli.main`:
 
-## Repo layout
+- `multirocket-new spec validate`
+- `multirocket-new train run`
+- `multirocket-new train katib-trial`
+- `multirocket-new report summarize`
+- `multirocket-new pipeline compile`
+- `multirocket-new pipeline submit`
+- `multirocket-new katib render`
+- `multirocket-new katib submit`
+- `multirocket-new cluster bootstrap`
 
-- `src/multirocket_new/config.py`: low-level single-run trainer config normalization
-- `src/multirocket_new/experiment.py`: spec-driven dataset execution and ablation orchestration
-- `src/multirocket_new/kubeflow/`: shared KFP, Katib, bootstrap, and submit helpers
-- `configs/experiments/`: smoke, default, and aggressive workflow specs
-- `kubeflow/pvc/`: PVC templates for data and results
-- `pipelines/`: compiled pipeline landing area
-- `tests/`: schema and Kubeflow protocol coverage
+## Important Paths
 
-## Notes
+- `configs/experiments/`: canonical workflow specs
+- `configs/search_spaces/`: package-local search-space definitions
+- `src/multirocket_new/experiment.py`: run orchestration
+- `src/multirocket_new/model.py`: MR-HY-SP model composition
+- `src/multirocket_new/kubeflow/`: client, bootstrap, Katib, pipeline helpers
+- `kubeflow/pvc/`: PVC manifests for package-local workflow storage
 
-- `selected_sensors` still coerces scaling mode to `global`.
-- MultiRocket kernel counts are still canonicalized to `aeon`'s effective 84-kernel blocks.
-- Katib metrics now follow the shared `objective`, `rmse`, `score`, `mae` stdout protocol.
+## Integration Status
 
-## Workflow Contract
-
-- The canonical workflow input is a versioned experiment spec under `configs/experiments/`.
-- Recommended compile output for parity with `mambasl-new` is `compiled/<spec-name>.yaml`.
+- Root integration exists through `kfp_workflow.plugins.mrhysp_cmapss`.
+- The package CLI is useful when working on the standalone package itself.
+- Root documentation remains the canonical source for integrated `kfp-workflow` operation.

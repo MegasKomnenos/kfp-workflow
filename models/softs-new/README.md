@@ -1,83 +1,72 @@
 # softs-new
 
-SOFTS (STAR Aggregate-Redistribute Transformer) model adapted for C-MAPSS turbofan RUL prediction.
+`softs-new` is a standalone SOFTS-based C-MAPSS workflow package. The root project consumes it through the `softs-cmapss` plugin adapter in `kfp_workflow.plugins.softs_cmapss`.
 
-## Architecture
+## Scope
 
-SOFTS uses a STAR (STar Aggregate-Redistribute) attention mechanism in an encoder-only transformer:
+This package owns:
 
-- **Inverted embedding** (`DataEmbedding_inverted`): treats each sensor channel as a token — input `[B, T, N]` → `[B, N, d_model]`
-- **STAR attention**: each channel token attends to a shared core state `d_core`, reducing inter-channel attention from O(N²) to O(N)
-- **RUL head** (`SOFTSForRUL`): SOFTS backbone with `pred_len=1` + `nn.Linear(c_in, 1)` head → scalar RUL
+- SOFTS model layers and C-MAPSS adaptation
+- package-local experiment specs and search spaces
+- package-local Katib manifest generation and KFP pipeline compilation
+- package-local training and trial execution CLI
 
-## Installation
+The integrated root project owns:
+
+- root `kfp-workflow` specs and submission
+- root serving, benchmark, and registry workflows
+
+## Quick Start
 
 ```bash
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install package and dev tooling
+make venv
 make install
+make test
+make spec-validate
 ```
 
-## Usage
+Validate a spec:
 
-### Spec validation
 ```bash
 softs-new spec validate --spec configs/experiments/fd001_smoke.yaml
 ```
 
-### Pipeline compilation
+Run package-local training:
+
 ```bash
-mkdir -p pipelines
+softs-new train run \
+  --spec configs/experiments/fd001_smoke.yaml \
+  --dataset FD001
+```
+
+Compile a package-local pipeline:
+
+```bash
 softs-new pipeline compile \
   --spec configs/experiments/fd001_smoke.yaml \
   --output pipelines/fd001_smoke.yaml
 ```
 
-### Running tests
-```bash
-make test
-```
+## CLI Surface
 
-### Local training
-```bash
-softs-new train run \
-  --spec configs/experiments/fd001_smoke.yaml \
-  --dataset FD001 \
-  --run-hpo false
-```
+Supported commands from `softs_new.cli.main`:
 
-## Experiment Specs
+- `softs-new spec validate`
+- `softs-new train run`
+- `softs-new train katib-trial`
+- `softs-new report summarize`
+- `softs-new pipeline compile`
+- `softs-new katib render`
+- `softs-new katib submit`
 
-| Spec | Description |
-|------|-------------|
-| `configs/experiments/fd001_smoke.yaml` | Single dataset, 2 epochs, CPU, fixed params |
-| `configs/experiments/fd_all_core_default.yaml` | FD001–FD004, random HPO, 12 trials |
-| `configs/experiments/fd_all_core_aggressive.yaml` | FD001–FD004, TPE HPO, 30 trials |
+This package does not currently expose standalone `pipeline submit` or `cluster bootstrap` commands.
 
-## HPO Search Space
+## Package Notes
 
-13 SOFTS-specific parameters tuned across two profiles (`default` / `aggressive`):
+- The package depends on `mambasl-new` for shared C-MAPSS data utilities.
+- The root workflow uses the unified root image at `docker/Dockerfile`; package docs should not claim a package-local `docker/Dockerfile.softs` because that file does not exist here.
 
-| Parameter | Role |
-|-----------|------|
-| `d_model` | Embedding dimension |
-| `d_core` | STAR core dimension (SOFTS-specific) |
-| `d_ff` | FFN hidden dimension |
-| `e_layers` | Number of encoder layers |
-| `dropout` | Dropout rate |
-| `activation` | Activation function (`relu` / `gelu`) |
-| `use_norm` | Instance normalisation |
-| `batch_size` | Mini-batch size |
-| `lr` | Learning rate (log scale) |
-| `weight_decay` | L2 regularisation (log scale) |
-| `huber_delta` | Huber loss delta |
-| `window_size` | Input sequence length |
-| `max_rul` | RUL clamp ceiling |
+## Reference Docs
 
-## Dependencies
-
-- `mambasl-new` — C-MAPSS data modules are re-exported from this package
-- `torch>=2.4`, `einops`, `kfp[kubernetes]==2.15.0`, `optuna>=4.5`, `pydantic>=2.7`
+- [PROJECT.md](/home/scouter/proj_2026_1_etri/test/models/softs-new/PROJECT.md)
+- [OPERATIONS.md](/home/scouter/proj_2026_1_etri/test/models/softs-new/OPERATIONS.md)
