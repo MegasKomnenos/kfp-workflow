@@ -101,6 +101,11 @@ Experiment listing:
 kfp-workflow pipeline list-experiments
 ```
 
+Notes:
+
+- Explicit compile examples write wherever `--output` points.
+- `pipeline submit` auto-compiles to `compiled/<spec-name>.yaml` before submission.
+
 ## Serving Workflow
 
 Create:
@@ -160,8 +165,11 @@ kfp-workflow benchmark download <run-id-or-prefix>
 
 Notes:
 
+- Benchmark commands currently accept YAML specs and Python benchmark definition files. The maintained examples in this repo use YAML.
 - Benchmark specs may reference reusable scenario and metric YAML under `configs/benchmarks/`.
 - Results are stored on the benchmark results PVC and can be downloaded locally through the CLI.
+- The shipped example benchmark specs set `model.cleanup: true`, but cleanup remains spec-controlled rather than universal benchmark behavior.
+- `benchmark submit` auto-compiles to `compiled/<spec-name>.yaml` before submission.
 
 ## Tuning Workflow
 
@@ -208,6 +216,7 @@ Important behavior:
 - The supported user-facing entrypoint is `kfp-workflow tune submit --spec ...`.
 - Each submission gets a generated opaque Katib experiment ID; the logical tune name is preserved separately in annotations and JSON output.
 - The public tune surface is `submit`, `list`, `get`, `download`, `space`, and `logs`.
+- Hidden internal commands such as `tune trial` and project-owned HPO engine details are implementation details, not the root operator contract.
 
 ## Cluster Bootstrap
 
@@ -242,7 +251,7 @@ Behavior:
 
 ## Docker Image
 
-Build the unified root image:
+Build the default root image used by the maintained examples:
 
 ```bash
 docker build -t kfp-workflow:latest -f docker/Dockerfile .
@@ -253,6 +262,13 @@ Or use the helper script:
 ```bash
 ./scripts/build_image.sh
 ```
+
+Image behavior:
+
+- Root examples default to `kfp-workflow:latest`.
+- Pipeline runtime image comes from `runtime.image`.
+- Serving and benchmark predictor images come from spec fields such as `predictor_image`.
+- Benchmark base components currently use the root image by default.
 
 Import the built image into the containerd-backed Kubernetes node:
 
@@ -267,8 +283,6 @@ Behavior:
 - It launches a one-shot importer pod pinned to the requested node and runs `nerdctl ... load` against `/run/containerd/containerd.sock`.
 - The importer pod is deleted automatically on script exit.
 
-If the cluster cannot pull from a registry, use the helper-pod import flow already documented by the project and avoid inventing alternate ad hoc paths.
-
 ## Auth and Connection Notes
 
 - Root `pipeline submit`, `benchmark submit`, `pipeline list|get|wait|terminate|logs`, and benchmark history commands can use `--host`, `--user`, `--existing-token`, and `--cookies`.
@@ -278,5 +292,6 @@ If the cluster cannot pull from a registry, use the helper-pod import flow alrea
 ## Maintenance Rules
 
 - Keep this file aligned with the actual CLI in [src/kfp_workflow/cli/main.py](/home/scouter/proj_2026_1_etri/test/src/kfp_workflow/cli/main.py).
+- Keep [DOCS.md](/home/scouter/proj_2026_1_etri/test/DOCS.md) aligned with the repo's documentation maintenance rules.
 - When adding or removing maintained directories, update [PROJECT.md](/home/scouter/proj_2026_1_etri/test/PROJECT.md).
 - When changing the supported root model plugins, update both this file and [README.md](/home/scouter/proj_2026_1_etri/test/README.md).

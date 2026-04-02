@@ -1,10 +1,13 @@
 # kfp-workflow
 
-`kfp-workflow` is a Kubeflow-oriented orchestration project for three related jobs:
+`kfp-workflow` is the integrated root orchestration layer for:
 
-- compile and submit KFP v2 training pipelines
-- deploy trained models with KServe
-- run benchmark workflows against temporary KServe deployments
+- KFP v2 training pipelines
+- KServe deployment and inspection
+- Katib-based hyperparameter tuning
+- benchmark workflows over deployed inference services
+- model and dataset registry operations
+- storage bootstrap for supported workflow specs
 
 The repo also contains standalone model packages under `models/` that supply the model-specific training and HPO logic used by the root project.
 
@@ -20,16 +23,17 @@ The root plugin registry currently supports these model plugins:
 
 ## Repository Map
 
-- `src/kfp_workflow/`: root Python package, CLI, specs, pipeline compiler, serving, benchmark, tuning, registries
+- `src/kfp_workflow/`: root Python package, CLI, specs, pipeline compiler, serving, benchmark, tuning, registries, bootstrap helpers
 - `configs/`: example pipeline, serving, tuning, and benchmark specs
 - `examples/`: Korean-language tutorial track
 - `models/`: standalone model packages and research workflows
-- `docker/`: unified container image for the root workflow
-- `pipelines/`: landing area for compiled KFP YAML
+- `docker/`: default root image build context used by examples and many default specs
+- `pipelines/`: example/manual output directory used by explicit compile examples
 
 For the concise tree and documentation inventory, see [PROJECT.md](/home/scouter/proj_2026_1_etri/test/PROJECT.md).
 For day-to-day commands and operational procedures, see [OPERATIONS.md](/home/scouter/proj_2026_1_etri/test/OPERATIONS.md).
 For the exact public CLI hierarchy, see [CLI_COMMAND_TREE.md](/home/scouter/proj_2026_1_etri/test/CLI_COMMAND_TREE.md).
+For repo-specific documentation rules, see [DOCS.md](/home/scouter/proj_2026_1_etri/test/DOCS.md).
 
 ## Quick Start
 
@@ -58,7 +62,8 @@ Use that file for:
 
 - exact command nesting
 - the current flat workflow-domain command layout
-- backend-ID-first tune and workflow command behavior
+- backend-ID-first workflow command behavior
+- Katib-experiment-oriented tune behavior
 - key required args and high-signal options per command
 
 ## Core Workflows
@@ -107,7 +112,7 @@ kfp-workflow tune download <experiment-id-prefix>
 
 ### 4. Benchmarks
 
-Benchmark specs live under `configs/benchmarks/` and deploy a temporary inference service, replay a scenario, collect metrics, then clean up.
+Benchmark specs live under `configs/benchmarks/` and typically deploy an inference service, replay a scenario, collect metrics, and optionally clean it up. The shipped benchmark examples currently set `model.cleanup: true`.
 
 ```bash
 kfp-workflow benchmark compile \
@@ -120,12 +125,12 @@ kfp-workflow benchmark submit \
 
 ## Specs and Overrides
 
-The root CLI works from YAML specs:
+The root CLI is spec-driven:
 
-- `configs/pipelines/`: `PipelineSpec`
-- `configs/serving/`: `ServingSpec`
-- `configs/tuning/`: `TuneSpec`
-- `configs/benchmarks/`: `BenchmarkSpec`
+- `configs/pipelines/`: YAML `PipelineSpec`
+- `configs/serving/`: YAML `ServingSpec`
+- `configs/tuning/`: YAML `TuneSpec`
+- `configs/benchmarks/`: example `BenchmarkSpec` inputs; benchmark commands currently accept YAML specs and Python benchmark definitions
 
 All of these support Helm-style `--set` overrides at validation or submission time where implemented:
 
@@ -142,10 +147,11 @@ kfp-workflow pipeline compile \
 - Default local KFP API host: `http://127.0.0.1:8888`
 - Default namespace in many examples: `kubeflow-user-example-com`
 - Root package requires Python `>=3.10`
-- The unified Docker image is built from [docker/Dockerfile](/home/scouter/proj_2026_1_etri/test/docker/Dockerfile)
-- The supported local-to-cluster image import helper is [load_image_to_cluster.sh](/home/scouter/proj_2026_1_etri/test/scripts/load_image_to_cluster.sh)
+- The root examples default to [docker/Dockerfile](/home/scouter/proj_2026_1_etri/test/docker/Dockerfile) and `kfp-workflow:latest`, while pipeline/tune runtime images and serving/benchmark predictor images remain domain-specific knobs
+- The maintained local-to-cluster image import helper is [load_image_to_cluster.sh](/home/scouter/proj_2026_1_etri/test/scripts/load_image_to_cluster.sh)
 - `cluster bootstrap` creates PVCs for pipeline, benchmark, or tune storage from a spec
 - Tune submissions generate opaque Katib experiment IDs; the logical tune name stays visible as a separate `name` field in JSON output
+- Explicit compile examples often write YAML to `pipelines/`, while `pipeline submit` and `benchmark submit` auto-compile into `compiled/<spec-name>.yaml` at runtime
 
 ## Tutorials
 

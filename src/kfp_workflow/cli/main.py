@@ -114,7 +114,7 @@ def _log_for_pod(v1: Any, pod: Any, namespace: str) -> str:
 
 app = typer.Typer(
     name="kfp-workflow",
-    help="KFP v2 training pipeline and KServe serving workflow manager.",
+    help="Integrated Kubeflow workflow manager for pipelines, serving, tuning, benchmarks, registry, and storage bootstrap.",
     add_completion=False,
 )
 
@@ -145,7 +145,7 @@ def main_callback(
         False, "--json", help="Output in JSON format.",
     ),
 ) -> None:
-    """KFP v2 training pipeline and KServe serving workflow manager."""
+    """Integrated Kubeflow workflow manager for pipelines, serving, tuning, benchmarks, registry, and storage bootstrap."""
     global _json_output
     _json_output = json_mode
 
@@ -156,7 +156,10 @@ def main_callback(
 
 @spec_app.command("validate")
 def cmd_spec_validate(
-    spec: Path = typer.Option(..., help="Path to a pipeline, serving, tune, or benchmark YAML spec."),
+    spec: Path = typer.Option(
+        ...,
+        help="Path to a pipeline/serving/tune YAML spec or benchmark spec file.",
+    ),
     spec_type: str = typer.Option(
         "pipeline",
         "--type",
@@ -208,7 +211,10 @@ def cmd_spec_validate(
 
 @benchmark_app.command("compile")
 def cmd_benchmark_compile(
-    spec: Path = typer.Option(..., help="Path to a benchmark YAML spec."),
+    spec: Path = typer.Option(
+        ...,
+        help="Path to a benchmark spec file (YAML or Python).",
+    ),
     output: Path = typer.Option(..., help="Output path for compiled YAML."),
     set_values: List[str] = typer.Option(
         [], "--set",
@@ -226,7 +232,10 @@ def cmd_benchmark_compile(
 
 @benchmark_app.command("submit")
 def cmd_benchmark_submit(
-    spec: Path = typer.Option(..., help="Path to a benchmark YAML spec."),
+    spec: Path = typer.Option(
+        ...,
+        help="Path to a benchmark spec file (YAML or Python).",
+    ),
     namespace: Optional[str] = typer.Option(None, help="Kubernetes namespace override."),
     host: Optional[str] = typer.Option(None, help="KFP API host override."),
     user: Optional[str] = typer.Option(None, help="Kubeflow user identity header."),
@@ -1325,7 +1334,10 @@ def _kubectl_completed(args: list[str], *, input_text: str | None = None) -> sub
 
 @cluster_app.command("bootstrap")
 def cmd_cluster_bootstrap(
-    spec: Path = typer.Option(..., help="Path to a pipeline, benchmark, or tune YAML spec."),
+    spec: Path = typer.Option(
+        ...,
+        help="Path to a pipeline/tune YAML spec or benchmark spec file.",
+    ),
     spec_type: str = typer.Option(
         "pipeline",
         "--type",
@@ -1333,7 +1345,7 @@ def cmd_cluster_bootstrap(
     ),
     dry_run: bool = typer.Option(False, help="Print manifests without applying."),
 ) -> None:
-    """Create PVCs for data and model storage."""
+    """Create PVC manifests derived from a pipeline, benchmark, or tune spec."""
     from kfp_workflow.benchmark.materialize import load_materialized_benchmark_spec
     from kfp_workflow.specs import load_pipeline_spec, load_tune_spec
 

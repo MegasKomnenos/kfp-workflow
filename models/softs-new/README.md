@@ -64,7 +64,7 @@ This package does not currently expose standalone `pipeline submit` or `cluster 
 ## Package Notes
 
 - The package depends on `mambasl-new` for shared C-MAPSS data utilities.
-- The root workflow uses the unified root image at `docker/Dockerfile`; package docs should not claim a package-local `docker/Dockerfile.softs` because that file does not exist here.
+- Integrated root examples default to the root image built from `docker/Dockerfile`; package docs should not claim a package-local `docker/Dockerfile.softs` because that file does not exist here.
 
 ## Reference Docs
 

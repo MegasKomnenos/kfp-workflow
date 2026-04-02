@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "kfp-workflow"
 version = "0.1.0"
-description = "KFP v2 training pipeline and KServe serving workflow manager"
+description = "Integrated Kubeflow workflow manager for pipelines, serving, tuning, benchmarks, registry, and storage bootstrap"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}

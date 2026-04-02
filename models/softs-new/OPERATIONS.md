@@ -63,4 +63,4 @@ softs-new pipeline compile \
 ## Integration Notes
 
 - Root-cluster submission, serving, and benchmarking are handled by `kfp-workflow`, not by this package.
-- Use the root unified image under [docker/Dockerfile](/home/scouter/proj_2026_1_etri/test/docker/Dockerfile) when documenting integrated workflows.
+- Integrated root examples default to the image built from [docker/Dockerfile](/home/scouter/proj_2026_1_etri/test/docker/Dockerfile); use that wording rather than implying a package-local image contract.

@@ -10,13 +10,14 @@ test/
 ├── CLAUDE.md                # Alternate agent guidance
 ├── GEMINI.md                # Alternate agent guidance
 ├── README.md                # Root overview, supported workflows, navigation hub
+├── DOCS.md                  # Documentation policy and drift-prevention rules
 ├── CLI_COMMAND_TREE.md      # Canonical public root CLI hierarchy and synopsis
 ├── PROJECT.md               # This maintained tree and component map
 ├── OPERATIONS.md            # Canonical local/cluster procedures
 ├── Makefile                 # Root setup, test, validation, compile helpers
 ├── pyproject.toml           # Root package metadata and dependencies
 ├── docker/
-│   └── Dockerfile           # Unified workflow image used by root pipelines and serving
+│   └── Dockerfile           # Default root image used by examples and many default specs
 ├── configs/
 │   ├── pipelines/           # Training pipeline specs
 │   ├── serving/             # KServe serving specs
@@ -28,7 +29,7 @@ test/
 ├── kubeflow/
 │   └── pvc/                 # Example PVC manifests
 ├── pipelines/
-│   └── README.md            # Generated pipeline output landing area
+│   └── README.md            # Manual/example compile output notes
 ├── scripts/
 │   ├── build_image.sh       # Helper for container image builds
 │   └── load_image_to_cluster.sh # Helper for importing local images into cluster containerd
@@ -58,6 +59,7 @@ test/
 ## Documentation Inventory
 
 - `README.md`: entry point for the integrated root project
+- `DOCS.md`: repo-specific documentation rules and audit lessons
 - `CLI_COMMAND_TREE.md`: canonical public `kfp-workflow` command hierarchy
 - `OPERATIONS.md`: repeatable procedures, command patterns, and deployment notes
 - `examples/README.md`: tutorial navigation in Korean
@@ -74,6 +76,7 @@ test/
 
 ## Generated or Secondary Areas
 
-- `pipelines/` holds compiled KFP YAML and should be treated as generated output.
+- `pipelines/` is an example/manual output area used by explicit compile examples.
+- `compiled/` is created on demand by `pipeline submit` and `benchmark submit`.
 - `results/` contains result artifacts and examples, not source-of-truth configuration.
 - `TimeMixer/` is a separate legacy code drop and is not the maintained entrypoint for `models/timemixer-new`.

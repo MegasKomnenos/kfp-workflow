@@ -61,7 +61,7 @@ kfp-workflow [--json]
 - Pipeline and benchmark commands accept full IDs or unique visible prefixes where noted.
 - Tune commands use generated opaque Katib experiment IDs. The logical tune spec name is returned separately as `name`.
 - `serve get` and `serve delete` take the service name as a positional argument, not `--name`.
-- Hidden internal commands are not part of this contract.
+- Hidden internal commands and internal HPO engine details are not part of this contract.
 
 ## `spec`
 
@@ -75,6 +75,7 @@ kfp-workflow [--json]
 - Notes:
   - `pipeline`, `serving`, and `tune` validate the typed spec plus plugin-specific config.
   - `benchmark` validates the materialized benchmark payload.
+  - Benchmark validation currently accepts YAML specs and Python benchmark definitions.
 
 ## `pipeline`
 
@@ -86,6 +87,8 @@ kfp-workflow [--json]
   - `--output <path>`
 - Key options:
   - `--set key=value`
+- Notes:
+  - The output path is always explicit; the command does not choose a default directory for you.
 
 ### `kfp-workflow pipeline submit`
 
@@ -101,6 +104,7 @@ kfp-workflow [--json]
 - Result:
   - human output prints `Submitted pipeline run: <run_id>`
   - JSON output uses `id` for the backend run ID
+  - the command auto-compiles to `compiled/<spec-name>.yaml` before submission
 
 ### `kfp-workflow pipeline get <run_id>`
 
@@ -190,6 +194,9 @@ kfp-workflow [--json]
   - `--output <path>`
 - Key options:
   - `--set key=value`
+- Notes:
+  - The output path is explicit.
+  - Benchmark compile currently accepts YAML specs and Python benchmark definitions.
 
 ### `kfp-workflow benchmark submit`
 
@@ -202,6 +209,9 @@ kfp-workflow [--json]
   - `--existing-token <token>`
   - `--cookies <cookie-header>`
   - `--set key=value`
+- Notes:
+  - Benchmark submit currently accepts YAML specs and Python benchmark definitions.
+  - The command auto-compiles to `compiled/<spec-name>.yaml` before submission.
 
 ### `kfp-workflow benchmark list`
 
@@ -254,6 +264,7 @@ kfp-workflow [--json]
   - human output prints `Submitted tune experiment: <experiment_id>`
   - JSON output uses `id` for the experiment ID and `name` for the logical tune spec name
   - `--dry-run` prints or returns the generated manifest without creating the experiment
+  - internal HPO engine details and the hidden `tune trial` runner are intentionally excluded from the public root contract
 
 ### `kfp-workflow tune list`
 
@@ -316,6 +327,8 @@ kfp-workflow [--json]
   - `--dry-run`
   - `--wait`
   - `--timeout <seconds>`
+- Notes:
+  - The resulting service name is the serving spec's `metadata.name`.
 
 ### `kfp-workflow serve delete <name>`
 
@@ -402,3 +415,6 @@ kfp-workflow [--json]
 - Key options:
   - `--type pipeline|benchmark|tune`
   - `--dry-run`
+- Notes:
+  - Pipeline and tune currently use YAML specs.
+  - Benchmark bootstrap currently accepts YAML specs and Python benchmark definitions.

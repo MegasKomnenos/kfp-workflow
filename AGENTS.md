@@ -42,6 +42,7 @@
 
 ## 5. Documentation & Version Control
 * **Continuous Maintenance:** Always actively maintain project documentation after project changes.
+* **Documentation Policy:** Always consult `DOCS.md` at the project root when auditing, writing, or restructuring documentation, and keep it updated when documentation rules or lessons change.
 * **Project Structure:** Always keep `PROJECT.md` at project directory, and maintain/reference up-to-date information of recursive project directory tree structure and description concisely in that file.
 * **Git Commits:** When making substantial changes, always make a commit to the local git repository, with descriptive explanation of changes made.
 * **Internal Reference:** Always keep `README.md` at project directory, and maintain/reference up-to-date information of project internal in that file.
