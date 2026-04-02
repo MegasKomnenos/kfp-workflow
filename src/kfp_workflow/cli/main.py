@@ -4,13 +4,26 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import subprocess
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import typer
-from kfp_server_api.exceptions import ApiException
+
+from kfp_workflow.cli.workflows import (
+    DEFAULT_HOST,
+    DEFAULT_NAMESPACE,
+    DEFAULT_USER,
+    build_run_payload,
+    find_workflow_for_run,
+    resolve_experiment_id,
+    resolve_run,
+    run_state_str,
+    short_id,
+    workflow_summary,
+)
 
 # Suppress noisy third-party deprecation warnings that are not actionable
 warnings.filterwarnings("ignore", category=FutureWarning, module="google")
@@ -45,13 +58,6 @@ def _coerce_json_scalar_values(payload: Dict[str, Any]) -> Dict[str, Any]:
         except (TypeError, ValueError):
             coerced[key] = value
     return coerced
-
-
-def _run_state_str(state: object) -> str:
-    """Extract run state as a plain string (handles enum or str)."""
-    if state is None:
-        return "UNKNOWN"
-    return state.value if hasattr(state, "value") else str(state)
 
 
 def _validate_plugin_config_or_exit(spec_dict: dict) -> None:
@@ -89,182 +95,6 @@ def _emit_validated_spec_output(name: str, payload: dict) -> None:
     typer.echo(json.dumps(payload, indent=2, default=str))
 
 
-def _find_workflow_for_run(run_id: str, namespace: str) -> Optional[Dict[str, Any]]:
-    """Return the Argo Workflow object for a KFP run, if present."""
-    from kubernetes import client as k8s_client
-    from kubernetes import config as k8s_config
-
-    try:
-        k8s_config.load_kube_config()
-        api = k8s_client.CustomObjectsApi()
-        result = api.list_namespaced_custom_object(
-            group="argoproj.io",
-            version="v1alpha1",
-            namespace=namespace,
-            plural="workflows",
-            label_selector=f"pipeline/runid={run_id}",
-        )
-    except Exception:
-        return None
-    items = result.get("items", [])
-    if not items:
-        return None
-    items.sort(key=lambda item: item.get("metadata", {}).get("creationTimestamp", ""))
-    return items[-1]
-
-
-def _workflow_summary(workflow: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Normalize a workflow object for CLI output."""
-    if not workflow:
-        return None
-
-    status = workflow.get("status", {})
-    nodes = status.get("nodes", {}) or {}
-    pending = []
-    failed = []
-    for node in nodes.values():
-        phase = node.get("phase", "")
-        display = node.get("displayName") or node.get("name") or ""
-        if phase in {"Pending", "Running"} and display:
-            pending.append(display)
-        elif phase in {"Failed", "Error"} and display:
-            failed.append(display)
-
-    return {
-        "name": workflow.get("metadata", {}).get("name", ""),
-        "phase": status.get("phase", ""),
-        "progress": status.get("progress", ""),
-        "finished_at": status.get("finishedAt", ""),
-        "message": status.get("message", ""),
-        "pending_nodes": sorted(set(pending))[:10],
-        "failed_nodes": sorted(set(failed))[:10],
-    }
-
-
-def _augment_run_payload(run: Any, workflow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Build the JSON payload returned by run-get and reused by wait."""
-    payload = {
-        "run_id": run.run_id,
-        "display_name": run.display_name,
-        "state": _run_state_str(run.state),
-        "created_at": str(run.created_at),
-        "finished_at": str(run.finished_at),
-        "experiment_id": run.experiment_id,
-        "error": str(run.error) if run.error else None,
-    }
-    workflow_summary = _workflow_summary(workflow)
-    if workflow_summary:
-        payload.update({
-            "workflow_name": workflow_summary["name"],
-            "workflow_phase": workflow_summary["phase"],
-            "workflow_progress": workflow_summary["progress"],
-            "workflow_finished_at": workflow_summary["finished_at"],
-            "workflow_message": workflow_summary["message"],
-            "pending_nodes": workflow_summary["pending_nodes"],
-            "failed_nodes": workflow_summary["failed_nodes"],
-        })
-    return payload
-
-
-def _iter_runs(
-    client: Any,
-    *,
-    namespace: str,
-    experiment_id: Optional[str] = None,
-    page_size: int = 100,
-    sort_by: str = "created_at desc",
-) -> List[Any]:
-    """Return all visible runs for ID-prefix resolution."""
-    runs: List[Any] = []
-    page_token = ""
-    while True:
-        response = client.list_runs(
-            page_size=page_size,
-            sort_by=sort_by,
-            experiment_id=experiment_id,
-            namespace=namespace,
-            page_token=page_token,
-        )
-        batch = list(response.runs or [])
-        runs.extend(batch)
-        raw_next_page_token = getattr(response, "next_page_token", "")
-        page_token = raw_next_page_token if isinstance(raw_next_page_token, str) else ""
-        if not page_token:
-            return runs
-
-
-def _iter_experiments(
-    client: Any,
-    *,
-    namespace: str,
-    page_size: int = 100,
-    sort_by: str = "created_at desc",
-) -> List[Any]:
-    """Return all visible experiments for ID-prefix resolution."""
-    experiments: List[Any] = []
-    page_token = ""
-    while True:
-        response = client.list_experiments(
-            page_size=page_size,
-            sort_by=sort_by,
-            namespace=namespace,
-            page_token=page_token,
-        )
-        batch = list(response.experiments or [])
-        experiments.extend(batch)
-        raw_next_page_token = getattr(response, "next_page_token", "")
-        page_token = raw_next_page_token if isinstance(raw_next_page_token, str) else ""
-        if not page_token:
-            return experiments
-
-
-def _resolve_unique_id_prefix(
-    raw_id: str,
-    candidates: List[str],
-    *,
-    kind: str,
-) -> str:
-    """Resolve a user-supplied full ID or unique prefix."""
-    exact_matches = [candidate for candidate in candidates if candidate == raw_id]
-    if exact_matches:
-        return exact_matches[0]
-
-    prefix_matches = [candidate for candidate in candidates if candidate.startswith(raw_id)]
-    if len(prefix_matches) == 1:
-        return prefix_matches[0]
-    if not prefix_matches:
-        raise typer.BadParameter(f"No {kind} found matching ID or prefix '{raw_id}'.")
-    preview = ", ".join(match[:8] for match in prefix_matches[:5])
-    raise typer.BadParameter(
-        f"ID prefix '{raw_id}' matches multiple {kind}s: {preview}"
-    )
-
-
-def _resolve_run(client: Any, *, run_id: str, namespace: str) -> Any:
-    """Resolve a full run ID or unique prefix and return the run object."""
-    try:
-        run = client.get_run(run_id=run_id)
-        resolved = getattr(run, "run_id", None)
-        if isinstance(resolved, str) and resolved:
-            return run
-    except ApiException as exc:
-        if getattr(exc, "status", None) != 404:
-            raise
-    candidates = [str(run.run_id) for run in _iter_runs(client, namespace=namespace) if getattr(run, "run_id", None)]
-    resolved_run_id = _resolve_unique_id_prefix(run_id, candidates, kind="run")
-    return client.get_run(run_id=resolved_run_id)
-
-
-def _resolve_experiment_id(client: Any, *, experiment_id: str, namespace: str) -> str:
-    """Resolve a full experiment ID or unique prefix against visible experiments."""
-    candidates = [
-        str(experiment.experiment_id)
-        for experiment in _iter_experiments(client, namespace=namespace)
-        if getattr(experiment, "experiment_id", None)
-    ]
-    return _resolve_unique_id_prefix(experiment_id, candidates, kind="experiment")
-
-
 def _log_for_pod(v1: Any, pod: Any, namespace: str) -> str:
     """Read logs from a pod, preferring the main container when present."""
     container_names = [c.name for c in (pod.spec.containers or [])]
@@ -289,23 +119,16 @@ app = typer.Typer(
 
 pipeline_app = typer.Typer(help="Compile and submit training pipelines.")
 benchmark_app = typer.Typer(help="Compile and submit benchmark workflows.")
-run_app = typer.Typer(help="Monitor and manage pipeline runs.")
-experiment_app = typer.Typer(help="Manage pipeline experiments.")
 serve_app = typer.Typer(help="Create and manage KServe InferenceServices.")
 registry_app = typer.Typer(help="Register and retrieve models and datasets.")
 model_reg_app = typer.Typer(help="Model registry operations.")
 dataset_reg_app = typer.Typer(help="Dataset registry operations.")
 cluster_app = typer.Typer(help="Cluster bootstrapping operations.")
 spec_app = typer.Typer(help="Spec validation.")
-tune_app = typer.Typer(
-    help="Hyperparameter tuning operations.",
-    invoke_without_command=True,
-)
+tune_app = typer.Typer(help="Hyperparameter tuning operations.")
 
 app.add_typer(pipeline_app, name="pipeline")
 app.add_typer(benchmark_app, name="benchmark")
-pipeline_app.add_typer(run_app, name="run")
-pipeline_app.add_typer(experiment_app, name="experiment")
 app.add_typer(serve_app, name="serve")
 app.add_typer(registry_app, name="registry")
 registry_app.add_typer(model_reg_app, name="model")
@@ -332,7 +155,7 @@ def main_callback(
 
 @spec_app.command("validate")
 def cmd_spec_validate(
-    spec: Path = typer.Option(..., help="Path to a pipeline or serving YAML spec."),
+    spec: Path = typer.Option(..., help="Path to a pipeline, serving, tune, or benchmark YAML spec."),
     spec_type: str = typer.Option(
         "pipeline",
         "--type",
@@ -428,23 +251,23 @@ def cmd_benchmark_submit(
         cookies=cookies,
         user=user,
     )
-    typer.echo(f"Benchmark submitted. Run ID: {run_id}")
+    typer.echo(f"Submitted benchmark run: {run_id}")
 
 
 @benchmark_app.command("list")
 def cmd_benchmark_list(
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
     ),
     page_size: int = typer.Option(20, help="Number of runs to return."),
     sort_by: str = typer.Option(
         "created_at desc", help="Sort order (e.g. 'created_at desc').",
     ),
     host: str = typer.Option(
-        "http://127.0.0.1:8888", help="KFP API host.",
+        DEFAULT_HOST, help="KFP API host.",
     ),
     user: str = typer.Option(
-        "user@example.com", help="Kubeflow user identity header.",
+        DEFAULT_USER, help="Kubeflow user identity header.",
     ),
     existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
     cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
@@ -475,16 +298,18 @@ def cmd_benchmark_list(
         if not workflow or not is_benchmark_workflow(workflow):
             continue
         benchmark_spec = extract_benchmark_spec(workflow) or {}
-        workflow_summary = _workflow_summary(workflow) or {}
+        workflow_meta = workflow_summary(workflow) or {}
         items.append({
-            "run_id": run.run_id,
-            "display_name": run.display_name,
-            "benchmark_name": benchmark_spec.get("metadata", {}).get("name", run.display_name),
-            "state": _run_state_str(run.state),
+            "id": run.run_id,
+            "name": benchmark_spec.get("metadata", {}).get("name", run.display_name),
+            "state": run_state_str(run.state),
             "created_at": str(run.created_at),
             "finished_at": str(run.finished_at),
-            "workflow_name": workflow_summary.get("name", ""),
-            "workflow_phase": workflow_summary.get("phase", ""),
+            "namespace": namespace,
+            "workflow": {
+                "name": workflow_meta.get("name", ""),
+                "phase": workflow_meta.get("phase", ""),
+            },
         })
 
     if _json_output:
@@ -494,10 +319,10 @@ def cmd_benchmark_list(
     rows = []
     for item in items:
         rows.append((
-            (item["run_id"] or "")[:8],
-            item["benchmark_name"] or "",
+            short_id(item["id"] or ""),
+            item["name"] or "",
             style_run_state(item["state"]),
-            item["workflow_name"] or "",
+            item["workflow"]["name"] or "",
             item["created_at"] or "",
             item["finished_at"] or "",
         ))
@@ -512,13 +337,13 @@ def cmd_benchmark_list(
 def cmd_benchmark_get(
     run_id: str = typer.Argument(..., help="Benchmark run ID."),
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
     ),
     host: str = typer.Option(
-        "http://127.0.0.1:8888", help="KFP API host.",
+        DEFAULT_HOST, help="KFP API host.",
     ),
     user: str = typer.Option(
-        "user@example.com", help="Kubeflow user identity header.",
+        DEFAULT_USER, help="Kubeflow user identity header.",
     ),
     existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
     cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
@@ -537,7 +362,7 @@ def cmd_benchmark_get(
         namespace=namespace, host=host, user=user,
         existing_token=existing_token, cookies=cookies,
     ) as client:
-        run = _resolve_run(client, run_id=run_id, namespace=namespace)
+        run = resolve_run(client, run_id=run_id, namespace=namespace)
         resolved_run_id = run.run_id
 
     workflow = find_workflow_for_run(resolved_run_id, namespace)
@@ -546,8 +371,12 @@ def cmd_benchmark_get(
         raise typer.Exit(code=1)
 
     benchmark_spec = extract_benchmark_spec(workflow) or {}
-    payload = _augment_run_payload(run, workflow)
-    payload["benchmark_name"] = benchmark_spec.get("metadata", {}).get("name", run.display_name)
+    payload = build_run_payload(
+        run,
+        workflow,
+        namespace=namespace,
+        name=benchmark_spec.get("metadata", {}).get("name", run.display_name),
+    )
 
     try:
         results = resolve_results(
@@ -555,41 +384,42 @@ def cmd_benchmark_get(
             benchmark_spec=benchmark_spec,
             namespace=namespace,
         )
-        payload["results_path"] = results["results_path"]
-        payload["results_summary"] = results["summary"]
+        payload["results"] = {
+            "path": results["results_path"],
+            "summary": results["summary"],
+        }
     except Exception as exc:
-        payload["results_error"] = str(exc)
+        payload["results"] = {"error": str(exc)}
 
     if _json_output:
         print_json(payload)
         return
 
     pairs = [
-        ("Benchmark", payload["benchmark_name"] or ""),
-        ("Run ID", run.run_id or ""),
-        ("Name", run.display_name or ""),
-        ("State", style_run_state(_run_state_str(run.state))),
+        ("Benchmark", payload["name"] or ""),
+        ("Run ID", payload["id"] or ""),
+        ("State", style_run_state(payload["state"])),
         ("Created", str(run.created_at or "")),
         ("Finished", str(run.finished_at or "")),
         ("Experiment ID", run.experiment_id or ""),
     ]
-    workflow_summary = _workflow_summary(workflow)
-    if workflow_summary:
+    workflow_meta = payload.get("workflow", {})
+    if workflow_meta.get("name"):
         pairs.extend([
-            ("Workflow", workflow_summary["name"]),
-            ("Workflow Phase", workflow_summary["phase"] or "(unknown)"),
-            ("Workflow Progress", workflow_summary["progress"] or "(unknown)"),
+            ("Workflow", workflow_meta["name"]),
+            ("Workflow Phase", workflow_meta.get("phase") or "(unknown)"),
+            ("Workflow Progress", workflow_meta.get("progress") or "(unknown)"),
         ])
-    if "results_path" in payload:
-        pairs.append(("Results Path", payload["results_path"]))
-    if "results_summary" in payload:
-        summary = payload["results_summary"]
+    if payload.get("results", {}).get("path"):
+        pairs.append(("Results Path", payload["results"]["path"]))
+    if payload.get("results", {}).get("summary"):
+        summary = payload["results"]["summary"]
         pairs.append(("Result Status", str(summary.get("status", ""))))
         pairs.append(("Request Count", str(summary.get("request_count", ""))))
         if "delta_joules" in summary:
             pairs.append(("Delta Joules", str(summary["delta_joules"])))
-    if "results_error" in payload:
-        pairs.append(("Results Error", payload["results_error"]))
+    if payload.get("results", {}).get("error"):
+        pairs.append(("Results Error", payload["results"]["error"]))
     print_kv(pairs)
 
 
@@ -598,13 +428,13 @@ def cmd_benchmark_download(
     run_id: str = typer.Argument(..., help="Benchmark run ID."),
     output: Optional[Path] = typer.Option(None, help="Write results JSON to this path."),
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
     ),
     host: str = typer.Option(
-        "http://127.0.0.1:8888", help="KFP API host.",
+        DEFAULT_HOST, help="KFP API host.",
     ),
     user: str = typer.Option(
-        "user@example.com", help="Kubeflow user identity header.",
+        DEFAULT_USER, help="Kubeflow user identity header.",
     ),
     existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
     cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
@@ -624,7 +454,7 @@ def cmd_benchmark_download(
         namespace=namespace, host=host, user=user,
         existing_token=existing_token, cookies=cookies,
     ) as client:
-        run = _resolve_run(client, run_id=run_id, namespace=namespace)
+        run = resolve_run(client, run_id=run_id, namespace=namespace)
         resolved_run_id = run.run_id
 
     workflow = find_workflow_for_run(resolved_run_id, namespace)
@@ -645,16 +475,17 @@ def cmd_benchmark_download(
     dump_json(results["payload"], destination)
 
     payload = {
-        "run_id": resolved_run_id,
-        "benchmark_name": benchmark_name,
+        "id": resolved_run_id,
+        "name": benchmark_name,
         "results_path": results["results_path"],
         "output_path": str(destination),
+        "namespace": namespace,
     }
     if _json_output:
         print_json(payload)
         return
 
-    typer.echo(f"Benchmark results downloaded to {destination}")
+    typer.echo(f"Downloaded benchmark results to {destination}")
 
 
 # ---------------------------------------------------------------------------
@@ -677,7 +508,7 @@ def cmd_pipeline_compile(
     loaded = load_pipeline_spec_with_overrides(spec, set_values or None)
     _validate_plugin_config_or_exit(loaded.model_dump())
     result = compile_pipeline(loaded, output)
-    typer.echo(f"Pipeline compiled to {result}")
+    typer.echo(f"Compiled pipeline package: {result}")
 
 
 @pipeline_app.command("submit")
@@ -707,29 +538,30 @@ def cmd_pipeline_submit(
         cookies=cookies,
         user=user,
     )
-    typer.echo(f"Pipeline submitted. Run ID: {run_id}")
+    typer.echo(f"Submitted pipeline run: {run_id}")
 
 
 # ---------------------------------------------------------------------------
-# pipeline run commands
+# pipeline commands
 # ---------------------------------------------------------------------------
 
-@run_app.command("get")
-def cmd_run_get(
+
+@pipeline_app.command("get")
+def cmd_pipeline_get(
     run_id: str = typer.Argument(..., help="Pipeline run ID."),
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
     ),
     host: str = typer.Option(
-        "http://127.0.0.1:8888", help="KFP API host.",
+        DEFAULT_HOST, help="KFP API host.",
     ),
     user: str = typer.Option(
-        "user@example.com", help="Kubeflow user identity header.",
+        DEFAULT_USER, help="Kubeflow user identity header.",
     ),
     existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
     cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
 ) -> None:
-    """Get details of a pipeline run by ID."""
+    """Show detailed info for a pipeline run."""
     from kfp_workflow.cli.output import print_json, print_kv, style_run_state
     from kfp_workflow.pipeline.connection import kfp_connection
 
@@ -737,47 +569,46 @@ def cmd_run_get(
         namespace=namespace, host=host, user=user,
         existing_token=existing_token, cookies=cookies,
     ) as client:
-        run = _resolve_run(client, run_id=run_id, namespace=namespace)
+        run = resolve_run(client, run_id=run_id, namespace=namespace)
         resolved_run_id = run.run_id
 
-    state = _run_state_str(run.state)
-    workflow = _find_workflow_for_run(run_id=resolved_run_id, namespace=namespace)
-    payload = _augment_run_payload(run, workflow)
+    workflow = find_workflow_for_run(run_id=resolved_run_id, namespace=namespace)
+    payload = build_run_payload(run, workflow, namespace=namespace)
 
     if _json_output:
         print_json(payload)
         return
 
     pairs = [
-        ("Run ID", run.run_id or ""),
-        ("Name", run.display_name or ""),
-        ("State", style_run_state(state)),
-        ("Created", str(run.created_at or "")),
-        ("Finished", str(run.finished_at or "")),
-        ("Experiment ID", run.experiment_id or ""),
+        ("Run ID", payload["id"] or ""),
+        ("Name", payload["name"] or ""),
+        ("State", style_run_state(payload["state"])),
+        ("Created", payload["created_at"] or ""),
+        ("Finished", payload["finished_at"] or ""),
+        ("Experiment ID", payload["workflow"].get("experiment_id", "")),
     ]
-    workflow_summary = _workflow_summary(workflow)
-    if workflow_summary:
+    workflow_meta = payload.get("workflow", {})
+    if workflow_meta.get("name"):
         pairs.extend([
-            ("Workflow", workflow_summary["name"]),
-            ("Workflow Phase", workflow_summary["phase"] or "(unknown)"),
-            ("Workflow Progress", workflow_summary["progress"] or "(unknown)"),
+            ("Workflow", workflow_meta["name"]),
+            ("Workflow Phase", workflow_meta.get("phase") or "(unknown)"),
+            ("Workflow Progress", workflow_meta.get("progress") or "(unknown)"),
         ])
-        if workflow_summary["message"]:
-            pairs.append(("Workflow Message", workflow_summary["message"]))
-        if workflow_summary["pending_nodes"]:
-            pairs.append(("Pending Nodes", ", ".join(workflow_summary["pending_nodes"])))
-        if workflow_summary["failed_nodes"]:
-            pairs.append(("Failed Nodes", ", ".join(workflow_summary["failed_nodes"])))
-    if run.error:
-        pairs.append(("Error", str(run.error)))
+        if workflow_meta.get("message"):
+            pairs.append(("Workflow Message", workflow_meta["message"]))
+        if workflow_meta.get("pending_nodes"):
+            pairs.append(("Pending Nodes", ", ".join(workflow_meta["pending_nodes"])))
+        if workflow_meta.get("failed_nodes"):
+            pairs.append(("Failed Nodes", ", ".join(workflow_meta["failed_nodes"])))
+    if payload["workflow"].get("error"):
+        pairs.append(("Error", payload["workflow"]["error"]))
     print_kv(pairs)
 
 
-@run_app.command("list")
-def cmd_run_list(
+@pipeline_app.command("list")
+def cmd_pipeline_list(
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
     ),
     experiment_id: Optional[str] = typer.Option(
         None, help="Filter by experiment ID.",
@@ -787,10 +618,10 @@ def cmd_run_list(
         "created_at desc", help="Sort order (e.g. 'created_at desc').",
     ),
     host: str = typer.Option(
-        "http://127.0.0.1:8888", help="KFP API host.",
+        DEFAULT_HOST, help="KFP API host.",
     ),
     user: str = typer.Option(
-        "user@example.com", help="Kubeflow user identity header.",
+        DEFAULT_USER, help="Kubeflow user identity header.",
     ),
     existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
     cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
@@ -804,7 +635,7 @@ def cmd_run_list(
         existing_token=existing_token, cookies=cookies,
     ) as client:
         resolved_experiment_id = (
-            _resolve_experiment_id(client, experiment_id=experiment_id, namespace=namespace)
+            resolve_experiment_id(client, experiment_id=experiment_id, namespace=namespace)
             if experiment_id else None
         )
         response = client.list_runs(
@@ -814,28 +645,29 @@ def cmd_run_list(
             namespace=namespace,
         )
 
-    runs = response.runs or []
+    items = [{
+        "id": r.run_id,
+        "name": r.display_name,
+        "state": run_state_str(r.state),
+        "created_at": str(r.created_at),
+        "finished_at": str(r.finished_at),
+        "namespace": namespace,
+    } for r in (response.runs or [])]
 
     if _json_output:
-        print_json([{
-            "run_id": r.run_id,
-            "display_name": r.display_name,
-            "state": _run_state_str(r.state),
-            "created_at": str(r.created_at),
-            "finished_at": str(r.finished_at),
-        } for r in runs])
+        print_json(items)
         return
 
-    rows = []
-    for r in runs:
-        state = _run_state_str(r.state)
-        rows.append((
-            (r.run_id or "")[:8],
-            r.display_name or "",
-            style_run_state(state),
-            str(r.created_at or ""),
-            str(r.finished_at or ""),
-        ))
+    rows = [
+        (
+            short_id(item["id"] or ""),
+            item["name"] or "",
+            style_run_state(item["state"]),
+            item["created_at"] or "",
+            item["finished_at"] or "",
+        )
+        for item in items
+    ]
     print_table(
         title="Pipeline Runs",
         columns=["ID", "NAME", "STATE", "CREATED", "FINISHED"],
@@ -843,138 +675,173 @@ def cmd_run_list(
     )
 
 
-@run_app.command("wait")
-def cmd_run_wait(
+@pipeline_app.command("wait")
+def cmd_pipeline_wait(
     run_id: str = typer.Argument(..., help="Pipeline run ID."),
     timeout: int = typer.Option(3600, help="Timeout in seconds."),
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
     ),
     host: str = typer.Option(
-        "http://127.0.0.1:8888", help="KFP API host.",
+        DEFAULT_HOST, help="KFP API host.",
     ),
     user: str = typer.Option(
-        "user@example.com", help="Kubeflow user identity header.",
+        DEFAULT_USER, help="Kubeflow user identity header.",
     ),
     existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
     cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
 ) -> None:
     """Wait for a pipeline run to reach a terminal state."""
-    from kfp_workflow.cli.output import console, style_run_state
+    from kfp_workflow.cli.output import console, print_json, style_run_state
     from kfp_workflow.pipeline.connection import kfp_connection
 
+    resolved_run_id = run_id
     try:
         with kfp_connection(
             namespace=namespace, host=host, user=user,
             existing_token=existing_token, cookies=cookies,
         ) as client:
-            resolved_run = _resolve_run(client, run_id=run_id, namespace=namespace)
+            resolved_run = resolve_run(client, run_id=run_id, namespace=namespace)
             resolved_run_id = resolved_run.run_id
-            with console.status(f"Waiting for run {resolved_run_id[:8]}..."):
+            with console.status(f"Waiting for run {short_id(resolved_run_id)}..."):
                 run = client.wait_for_run_completion(resolved_run_id, timeout=timeout)
     except TimeoutError:
-        workflow_summary = _workflow_summary(
-            _find_workflow_for_run(run_id=resolved_run_id, namespace=namespace)
+        workflow_meta = workflow_summary(
+            find_workflow_for_run(run_id=resolved_run_id, namespace=namespace)
         )
-        console.print(
-            f"Run {resolved_run_id[:8]} did not reach a terminal KFP state within {timeout}s.",
-            style="yellow",
-        )
-        if workflow_summary:
+        if _json_output:
+            print_json({
+                "id": resolved_run_id,
+                "namespace": namespace,
+                "state": "TIMEOUT",
+                "workflow": workflow_meta or {},
+                "timeout_seconds": timeout,
+            })
+        else:
+            console.print(
+                f"Run {short_id(resolved_run_id)} did not reach a terminal KFP state within {timeout}s.",
+                style="yellow",
+            )
+            if workflow_meta:
+                console.print(
+                    "Workflow: "
+                    f"{workflow_meta['name']} "
+                    f"phase={workflow_meta['phase'] or 'Unknown'} "
+                    f"progress={workflow_meta['progress'] or 'Unknown'}"
+                )
+                if workflow_meta["message"]:
+                    console.print(f"Workflow message: {workflow_meta['message']}")
+                if workflow_meta["pending_nodes"]:
+                    console.print(
+                        "Pending nodes: " + ", ".join(workflow_meta["pending_nodes"])
+                    )
+                if workflow_meta["failed_nodes"]:
+                    console.print(
+                        "Failed nodes: " + ", ".join(workflow_meta["failed_nodes"]),
+                        style="red",
+                    )
+        raise typer.Exit(code=1)
+
+    state = run_state_str(run.state)
+    workflow = find_workflow_for_run(run_id=resolved_run_id, namespace=namespace)
+    payload = build_run_payload(run, workflow, namespace=namespace)
+
+    if _json_output:
+        print_json(payload)
+    else:
+        console.print(f"Run {short_id(resolved_run_id)} finished: {style_run_state(state)}")
+        workflow_meta = payload.get("workflow", {})
+        if workflow_meta.get("phase"):
             console.print(
                 "Workflow: "
-                f"{workflow_summary['name']} "
-                f"phase={workflow_summary['phase'] or 'Unknown'} "
-                f"progress={workflow_summary['progress'] or 'Unknown'}"
+                f"{workflow_meta['name']} "
+                f"phase={workflow_meta['phase']} "
+                f"progress={workflow_meta.get('progress') or '(unknown)'}"
             )
-            if workflow_summary["message"]:
-                console.print(f"Workflow message: {workflow_summary['message']}")
-            if workflow_summary["pending_nodes"]:
+            if workflow_meta.get("failed_nodes"):
                 console.print(
-                    "Pending nodes: " + ", ".join(workflow_summary["pending_nodes"])
-                )
-            if workflow_summary["failed_nodes"]:
-                console.print(
-                    "Failed nodes: " + ", ".join(workflow_summary["failed_nodes"]),
+                    "Failed nodes: " + ", ".join(workflow_meta["failed_nodes"]),
                     style="red",
                 )
-        raise typer.Exit(code=1)
 
-    state = _run_state_str(run.state)
-    console.print(f"Run {resolved_run_id[:8]} finished: {style_run_state(state)}")
-
-    workflow_summary = _workflow_summary(
-        _find_workflow_for_run(run_id=resolved_run_id, namespace=namespace)
-    )
-    if workflow_summary and workflow_summary["phase"]:
-        console.print(
-            "Workflow: "
-            f"{workflow_summary['name']} "
-            f"phase={workflow_summary['phase']} "
-            f"progress={workflow_summary['progress'] or '(unknown)'}"
-        )
-        if workflow_summary["failed_nodes"]:
-            console.print(
-                "Failed nodes: " + ", ".join(workflow_summary["failed_nodes"]),
-                style="red",
-            )
+        if state in ("FAILED", "CANCELED") and payload["workflow"].get("error"):
+            console.print(f"Error: {payload['workflow']['error']}", style="red")
 
     if state in ("FAILED", "CANCELED"):
-        if run.error:
-            console.print(f"Error: {run.error}", style="red")
         raise typer.Exit(code=1)
 
 
-@run_app.command("terminate")
-def cmd_run_terminate(
+@pipeline_app.command("terminate")
+def cmd_pipeline_terminate(
     run_id: str = typer.Argument(..., help="Pipeline run ID."),
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
     ),
     host: str = typer.Option(
-        "http://127.0.0.1:8888", help="KFP API host.",
+        DEFAULT_HOST, help="KFP API host.",
     ),
     user: str = typer.Option(
-        "user@example.com", help="Kubeflow user identity header.",
+        DEFAULT_USER, help="Kubeflow user identity header.",
     ),
     existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
     cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
 ) -> None:
     """Terminate (cancel) a running pipeline."""
+    from kfp_workflow.cli.output import print_json
     from kfp_workflow.pipeline.connection import kfp_connection
 
     with kfp_connection(
         namespace=namespace, host=host, user=user,
         existing_token=existing_token, cookies=cookies,
     ) as client:
-        resolved_run_id = _resolve_run(client, run_id=run_id, namespace=namespace).run_id
+        resolved_run_id = resolve_run(client, run_id=run_id, namespace=namespace).run_id
         client.terminate_run(resolved_run_id)
 
-    typer.echo(f"Run {resolved_run_id[:8]} terminated.")
+    payload = {
+        "id": resolved_run_id,
+        "namespace": namespace,
+        "state": "CANCELING",
+    }
+    if _json_output:
+        print_json(payload)
+        return
+
+    typer.echo(f"Terminated pipeline run: {resolved_run_id}")
 
 
-@run_app.command("logs")
-def cmd_run_logs(
+@pipeline_app.command("logs")
+def cmd_pipeline_logs(
     run_id: str = typer.Argument(..., help="Pipeline run ID."),
     step: Optional[str] = typer.Option(
         None, help="Filter pods by step name substring.",
     ),
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
     ),
+    host: str = typer.Option(
+        DEFAULT_HOST, help="KFP API host.",
+    ),
+    user: str = typer.Option(
+        DEFAULT_USER, help="Kubeflow user identity header.",
+    ),
+    existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
+    cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
 ) -> None:
     """View logs from a pipeline run's component pods."""
     from kubernetes import client as k8s_client
     from kubernetes import config as k8s_config
 
-    from kfp_workflow.cli.output import console
+    from kfp_workflow.cli.output import console, print_json
     from kfp_workflow.pipeline.connection import kfp_connection
 
     with kfp_connection(
         namespace=namespace,
-        user="user@example.com",
+        host=host,
+        user=user,
+        existing_token=existing_token,
+        cookies=cookies,
     ) as client:
-        resolved_run_id = _resolve_run(client, run_id=run_id, namespace=namespace).run_id
+        resolved_run_id = resolve_run(client, run_id=run_id, namespace=namespace).run_id
 
     k8s_config.load_kube_config()
     v1 = k8s_client.CoreV1Api()
@@ -983,12 +850,10 @@ def cmd_run_logs(
         label_selector=f"pipeline/runid={resolved_run_id}",
     )
 
-    # Filter to implementation pods (contain actual component output)
     impl_pods = [
         p for p in pods.items
         if "system-container-impl" in p.metadata.name
     ]
-
     if step:
         impl_pods = [p for p in impl_pods if step in p.metadata.name]
 
@@ -1003,57 +868,67 @@ def cmd_run_logs(
         pods_to_show = driver_pods
 
     if not pods_to_show:
-        workflow_summary = _workflow_summary(
-            _find_workflow_for_run(run_id=resolved_run_id, namespace=namespace)
+        workflow_meta = workflow_summary(
+            find_workflow_for_run(run_id=resolved_run_id, namespace=namespace)
         )
-        if workflow_summary:
+        if workflow_meta:
             typer.echo(
                 "No matching pods found. "
-                f"Workflow {workflow_summary['name']} "
-                f"is {workflow_summary['phase'] or 'Unknown'} "
-                f"with progress {workflow_summary['progress'] or 'Unknown'}.",
+                f"Workflow {workflow_meta['name']} "
+                f"is {workflow_meta['phase'] or 'Unknown'} "
+                f"with progress {workflow_meta['progress'] or 'Unknown'}.",
                 err=True,
             )
-            if workflow_summary["message"]:
-                typer.echo(f"Workflow message: {workflow_summary['message']}", err=True)
-            if workflow_summary["pending_nodes"]:
+            if workflow_meta["message"]:
+                typer.echo(f"Workflow message: {workflow_meta['message']}", err=True)
+            if workflow_meta["pending_nodes"]:
                 typer.echo(
-                    "Pending nodes: " + ", ".join(workflow_summary["pending_nodes"]),
+                    "Pending nodes: " + ", ".join(workflow_meta["pending_nodes"]),
                     err=True,
                 )
-            if workflow_summary["failed_nodes"]:
+            if workflow_meta["failed_nodes"]:
                 typer.echo(
-                    "Failed nodes: " + ", ".join(workflow_summary["failed_nodes"]),
+                    "Failed nodes: " + ", ".join(workflow_meta["failed_nodes"]),
                     err=True,
                 )
         else:
             typer.echo("No matching pods found.", err=True)
         raise typer.Exit(code=1)
 
+    entries = []
     for pod in sorted(pods_to_show, key=lambda p: p.metadata.name):
-        console.rule(f"[bold]{pod.metadata.name}[/bold]")
         try:
             log = _log_for_pod(v1=v1, pod=pod, namespace=namespace)
-            typer.echo(log)
         except k8s_client.ApiException as exc:
-            typer.echo(f"  (error reading logs: {exc.reason})", err=True)
+            log = f"(error reading logs: {exc.reason})"
+        entries.append({
+            "id": resolved_run_id,
+            "name": pod.metadata.name,
+            "namespace": namespace,
+            "state": "LOGS",
+            "logs": log,
+        })
+
+    if _json_output:
+        print_json(entries)
+        return
+
+    for entry in entries:
+        console.rule(f"[bold]{entry['name']}[/bold]")
+        typer.echo(entry["logs"])
 
 
-# ---------------------------------------------------------------------------
-# pipeline experiment commands
-# ---------------------------------------------------------------------------
-
-@experiment_app.command("list")
-def cmd_experiment_list(
+@pipeline_app.command("list-experiments")
+def cmd_pipeline_list_experiments(
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
     ),
     page_size: int = typer.Option(20, help="Number of experiments to return."),
     host: str = typer.Option(
-        "http://127.0.0.1:8888", help="KFP API host.",
+        DEFAULT_HOST, help="KFP API host.",
     ),
     user: str = typer.Option(
-        "user@example.com", help="Kubeflow user identity header.",
+        DEFAULT_USER, help="Kubeflow user identity header.",
     ),
     existing_token: Optional[str] = typer.Option(None, help="Bearer token for auth."),
     cookies: Optional[str] = typer.Option(None, help="Cookie header for auth."),
@@ -1070,25 +945,27 @@ def cmd_experiment_list(
             page_size=page_size, namespace=namespace,
         )
 
-    experiments = response.experiments or []
+    items = [{
+        "id": e.experiment_id,
+        "name": e.display_name,
+        "created_at": str(e.created_at),
+        "last_run_created_at": str(e.last_run_created_at),
+        "namespace": namespace,
+    } for e in (response.experiments or [])]
 
     if _json_output:
-        print_json([{
-            "experiment_id": e.experiment_id,
-            "display_name": e.display_name,
-            "created_at": str(e.created_at),
-            "last_run_created_at": str(e.last_run_created_at),
-        } for e in experiments])
+        print_json(items)
         return
 
-    rows = []
-    for e in experiments:
-        rows.append((
-            (e.experiment_id or "")[:8],
-            e.display_name or "",
-            str(e.created_at or ""),
-            str(e.last_run_created_at or ""),
-        ))
+    rows = [
+        (
+            short_id(item["id"] or ""),
+            item["name"] or "",
+            item["created_at"] or "",
+            item["last_run_created_at"] or "",
+        )
+        for item in items
+    ]
     print_table(
         title="Experiments",
         columns=["ID", "NAME", "CREATED", "LAST RUN"],
@@ -1124,7 +1001,13 @@ def cmd_serve_create(
         resources=loaded.resources.model_dump(),
         dry_run=dry_run,
     )
-    typer.echo(json.dumps(result, indent=2))
+    payload = {
+        "id": loaded.metadata.name,
+        "name": loaded.metadata.name,
+        "namespace": loaded.namespace,
+        "state": "READY" if dry_run else "CREATED",
+        "service": result,
+    }
 
     if wait and not dry_run:
         diagnostics = kserve.wait_for_inference_service_ready(
@@ -1132,40 +1015,44 @@ def cmd_serve_create(
             namespace=loaded.namespace,
             timeout=timeout,
         )
-        typer.echo(
-            json.dumps(
-                {
-                    "name": loaded.metadata.name,
-                    "namespace": loaded.namespace,
-                    "ready": diagnostics["ready"],
-                    "conditions": diagnostics["conditions"],
-                    "events": diagnostics["events"],
-                },
-                indent=2,
-            )
-        )
+        payload.update({
+            "state": diagnostics["ready"],
+            "conditions": diagnostics["conditions"],
+            "events": diagnostics["events"],
+        })
         if diagnostics["ready"] != "True":
+            typer.echo(json.dumps(payload, indent=2))
             raise typer.Exit(code=1)
+    if _json_output:
+        from kfp_workflow.cli.output import print_json
+        print_json(payload)
+        return
+    typer.echo(json.dumps(payload, indent=2))
 
 
 @serve_app.command("delete")
 def cmd_serve_delete(
-    name: str = typer.Option(..., help="InferenceService name."),
+    name: str = typer.Argument(..., help="InferenceService name."),
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace."
+        DEFAULT_NAMESPACE, help="Kubernetes namespace."
     ),
 ) -> None:
     """Delete a KServe InferenceService."""
     from kfp_workflow.serving import kserve
 
     kserve.delete_inference_service(name=name, namespace=namespace)
-    typer.echo(f"InferenceService '{name}' deleted.")
+    payload = {"id": name, "name": name, "namespace": namespace, "state": "DELETED"}
+    if _json_output:
+        from kfp_workflow.cli.output import print_json
+        print_json(payload)
+        return
+    typer.echo(f"Deleted inference service: {name}")
 
 
 @serve_app.command("list")
 def cmd_serve_list(
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
     ),
 ) -> None:
     """List KServe InferenceServices in a namespace."""
@@ -1180,9 +1067,12 @@ def cmd_serve_list(
 
     if _json_output:
         print_json([{
+            "id": svc["metadata"]["name"],
             "name": svc["metadata"]["name"],
-            "ready": _isvc_ready(svc),
+            "state": _isvc_ready(svc),
             "url": svc.get("status", {}).get("url", ""),
+            "created_at": svc["metadata"].get("creationTimestamp", ""),
+            "namespace": namespace,
         } for svc in items])
         return
 
@@ -1203,9 +1093,9 @@ def cmd_serve_list(
 
 @serve_app.command("get")
 def cmd_serve_get(
-    name: str = typer.Option(..., help="InferenceService name."),
+    name: str = typer.Argument(..., help="InferenceService name."),
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
     ),
 ) -> None:
     """Get detailed status of a KServe InferenceService."""
@@ -1225,11 +1115,12 @@ def cmd_serve_get(
 
     if _json_output:
         print_json({
+            "id": name,
             "name": name,
             "namespace": namespace,
-            "ready": ready,
+            "state": ready,
             "url": url,
-            "created": created,
+            "created_at": created,
             "conditions": conditions,
             "events": events,
         })
@@ -1433,7 +1324,7 @@ def _kubectl_completed(args: list[str], *, input_text: str | None = None) -> sub
 
 @cluster_app.command("bootstrap")
 def cmd_cluster_bootstrap(
-    spec: Path = typer.Option(..., help="Path to a pipeline YAML spec."),
+    spec: Path = typer.Option(..., help="Path to a pipeline, benchmark, or tune YAML spec."),
     spec_type: str = typer.Option(
         "pipeline",
         "--type",
@@ -1534,11 +1425,114 @@ def cmd_cluster_bootstrap(
 # ---------------------------------------------------------------------------
 
 
-def _tune_wait(experiment_name: str, namespace: str) -> None:
+def _generate_experiment_id() -> str:
+    """Generate an opaque 16-character Katib experiment ID.
+
+    The returned ID stays lowercase hex-like for UX consistency with other
+    backend-generated identifiers while always satisfying the Katib name regex
+    by forcing the first character to be alphabetic.
+    """
+    raw = secrets.token_hex(8)
+    if raw[0].isdigit():
+        raw = f"a{raw[1:]}"
+    return raw
+
+
+def _build_tune_manifest(
+    spec_path: Path,
+    set_values: List[str],
+) -> tuple[Any, str, dict, str]:
+    """Load, validate, and materialize a Katib experiment manifest."""
+    import yaml as pyyaml
+
+    from kfp_workflow.plugins import get_plugin
+    from kfp_workflow.specs import load_tune_spec_with_overrides
+    from kfp_workflow.tune.engine import resolve_search_space
+    from kfp_workflow.tune.katib import (
+        _trial_parameters_json,
+        build_katib_experiment,
+    )
+
+    loaded = load_tune_spec_with_overrides(spec_path, set_values or None)
+    _validate_plugin_config_or_exit(loaded.model_dump())
+    plugin = get_plugin(loaded.model.name)
+    search_space = resolve_search_space(plugin, loaded.model_dump())
+    experiment_id = _generate_experiment_id()
+    trial_command = [
+        "python", "-m", "kfp_workflow.cli.main",
+        "tune", "trial",
+        "--data-mount-path", loaded.storage.data_mount_path,
+        "--experiment-name", experiment_id,
+        "--namespace", loaded.runtime.namespace,
+        "--results-mount-path", loaded.storage.results_mount_path,
+    ]
+    trial_env = {
+        "KFP_WORKFLOW_TUNE_SPEC_JSON": loaded.model_dump_json(),
+        "KFP_WORKFLOW_TUNE_TRIAL_PARAMS_JSON": _trial_parameters_json(search_space),
+    }
+    manifest = build_katib_experiment(
+        loaded,
+        search_space,
+        trial_image=loaded.runtime.image,
+        trial_command=trial_command,
+        trial_env=trial_env,
+        experiment_name=experiment_id,
+    )
+    manifest_yaml = pyyaml.dump(manifest, default_flow_style=False, sort_keys=False)
+    return loaded, experiment_id, manifest, manifest_yaml
+
+
+def _tune_detail_payload(experiment: Dict[str, Any], namespace: str) -> Dict[str, Any]:
+    """Build a normalized detail payload for one Katib experiment."""
+    from kfp_workflow.tune.history import (
+        extract_tune_spec,
+        resolve_results,
+        summarize_experiment,
+    )
+
+    tune_spec = extract_tune_spec(experiment) or {}
+    summary = summarize_experiment(experiment)
+    payload = {
+        "id": summary["id"],
+        "name": summary["name"],
+        "namespace": namespace,
+        "state": summary["state"],
+        "created_at": summary["created_at"],
+        "finished_at": summary["finished_at"],
+        "best_value": summary.get("best_value"),
+        "best_params": summary.get("best_params", {}),
+        "trials": {
+            "total": summary.get("n_trials"),
+            "completed": summary.get("n_completed"),
+            "pruned": summary.get("n_pruned"),
+            "failed": summary.get("n_failed"),
+        },
+    }
+    try:
+        results = resolve_results(
+            experiment=experiment,
+            tune_spec=tune_spec,
+            namespace=namespace,
+        )
+        payload["results"] = {
+            "path": results["results_path"],
+            "summary": results["summary"],
+            "payload": results["payload"],
+        }
+        if results["payload"].get("best_params"):
+            payload["best_params"] = results["payload"]["best_params"]
+        if results["payload"].get("best_value") is not None:
+            payload["best_value"] = results["payload"]["best_value"]
+    except Exception as exc:
+        payload["results"] = {"error": str(exc)}
+    return payload
+
+
+def _tune_wait(experiment_id: str, namespace: str) -> None:
     """Poll a Katib experiment until completion and display results."""
     from kfp_workflow.tune.history import watch_experiment
 
-    typer.echo(f"Waiting for experiment '{experiment_name}'...")
+    typer.echo(f"Waiting for tune experiment '{experiment_id}'...")
 
     def on_update(summary: dict) -> None:
         state = summary.get("state", "PENDING")
@@ -1550,7 +1544,7 @@ def _tune_wait(experiment_name: str, namespace: str) -> None:
 
     try:
         final = watch_experiment(
-            experiment_name, namespace, on_update=on_update,
+            experiment_id, namespace, on_update=on_update,
         )
     except TimeoutError as exc:
         typer.echo(str(exc), err=True)
@@ -1558,24 +1552,20 @@ def _tune_wait(experiment_name: str, namespace: str) -> None:
 
     state = final.get("state", "UNKNOWN")
     if state == "SUCCEEDED":
-        typer.echo(f"\nExperiment '{experiment_name}' completed successfully.")
+        typer.echo(f"\nTune experiment '{experiment_id}' completed successfully.")
         if final.get("best_value") is not None:
             typer.echo(f"Best objective value: {final['best_value']}")
         if final.get("best_params"):
             typer.echo("Best parameters:")
             typer.echo(json.dumps(final["best_params"], indent=2, default=str))
     else:
-        typer.echo(f"\nExperiment '{experiment_name}' finished with state: {state}")
+        typer.echo(f"\nTune experiment '{experiment_id}' finished with state: {state}")
         raise typer.Exit(code=1)
 
 
-@tune_app.callback()
-def tune_callback(
-    ctx: typer.Context,
-    spec: Optional[Path] = typer.Option(
-        None, help="Path to a tune YAML spec.  When provided without a "
-        "subcommand, submits a Katib experiment.",
-    ),
+@tune_app.command("submit")
+def cmd_tune_submit(
+    spec: Path = typer.Option(..., help="Path to a tune YAML spec."),
     set_values: List[str] = typer.Option(
         [], "--set",
         help="Override spec values (e.g., --set hpo.max_trials=30).",
@@ -1591,108 +1581,52 @@ def tune_callback(
         help="Wait for experiment completion and display results.",
     ),
 ) -> None:
-    """Hyperparameter tuning operations.
+    """Submit a Katib hyperparameter tuning experiment."""
+    from kfp_workflow.cli.output import print_json
 
-    When called with --spec and no subcommand, submits a new Katib
-    experiment to the cluster (equivalent to the old 'tune katib').
-    """
-    if ctx.invoked_subcommand is not None:
-        return
-
-    if spec is None:
-        # No subcommand and no --spec: show help
-        typer.echo(ctx.get_help())
-        return
-
-    # Default action: submit to Katib (same as 'tune katib')
-    import yaml as pyyaml
-
-    from kfp_workflow.plugins import get_plugin
-    from kfp_workflow.specs import load_tune_spec_with_overrides
-    from kfp_workflow.tune.engine import resolve_search_space
-    from kfp_workflow.tune.katib import (
-        build_katib_experiment,
-        _trial_parameters_json,
-    )
-
-    loaded = load_tune_spec_with_overrides(spec, set_values or None)
-    _validate_plugin_config_or_exit(loaded.model_dump())
-    plugin = get_plugin(loaded.model.name)
-    search_space = resolve_search_space(plugin, loaded.model_dump())
-
-    experiment_name = _generate_experiment_name(loaded.metadata.name)
-
-    trial_command = [
-        "python", "-m", "kfp_workflow.cli.main",
-        "tune", "trial",
-        "--data-mount-path", loaded.storage.data_mount_path,
-        "--experiment-name", experiment_name,
-        "--namespace", loaded.runtime.namespace,
-        "--results-mount-path", loaded.storage.results_mount_path,
-    ]
-    trial_env = {
-        "KFP_WORKFLOW_TUNE_SPEC_JSON": loaded.model_dump_json(),
-        "KFP_WORKFLOW_TUNE_TRIAL_PARAMS_JSON": _trial_parameters_json(
-            search_space,
-        ),
+    loaded, experiment_id, manifest, manifest_yaml = _build_tune_manifest(spec, set_values)
+    payload = {
+        "id": experiment_id,
+        "name": loaded.metadata.name,
+        "namespace": loaded.runtime.namespace,
+        "state": "SUBMITTED",
     }
-    manifest = build_katib_experiment(
-        loaded,
-        search_space,
-        trial_image=loaded.runtime.image,
-        trial_command=trial_command,
-        trial_env=trial_env,
-        experiment_name=experiment_name,
-    )
-
-    manifest_yaml = pyyaml.dump(manifest, default_flow_style=False, sort_keys=False)
 
     if output:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(manifest_yaml)
-        typer.echo(f"Katib manifest written to {output}")
+        payload["output_path"] = str(output)
 
-    if dry_run or _json_output:
+    if dry_run:
+        payload["state"] = "DRY_RUN"
         if _json_output:
-            from kfp_workflow.cli.output import print_json
-            print_json(manifest)
+            payload["manifest"] = manifest
+            print_json(payload)
         else:
             typer.echo(manifest_yaml)
-        if dry_run:
-            return
+        return
 
     _run_kubectl(
         ["kubectl", "create", "-f", "-"],
         input_text=json.dumps(manifest),
     )
 
-    typer.echo(
-        f"Tune experiment '{experiment_name}' submitted "
-        f"to namespace '{loaded.runtime.namespace}'."
-    )
+    if _json_output:
+        print_json(payload)
+    else:
+        typer.echo(f"Submitted tune experiment: {experiment_id}")
 
     if wait:
-        _tune_wait(experiment_name, loaded.runtime.namespace)
+        _tune_wait(experiment_id, loaded.runtime.namespace)
 
 
-@tune_app.command("status")
-def cmd_tune_status(
-    experiment_name: Optional[str] = typer.Argument(
-        None, help="Experiment name or ID prefix.  Omit to list all.",
-    ),
+@tune_app.command("list")
+def cmd_tune_list(
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
     ),
 ) -> None:
-    """Show tune experiment status.  Without an argument, lists all experiments."""
-    if experiment_name is None:
-        _tune_status_list(namespace)
-    else:
-        _tune_status_get(experiment_name, namespace)
-
-
-def _tune_status_list(namespace: str) -> None:
-    """List all managed Katib tune experiments."""
+    """List managed Katib tune experiments."""
     from kfp_workflow.cli.output import print_json, print_table, style_run_state
     from kfp_workflow.tune.history import (
         is_tune_experiment,
@@ -1704,7 +1638,8 @@ def _tune_status_list(namespace: str) -> None:
     for experiment in list_tune_experiments(namespace):
         if not is_tune_experiment(experiment):
             continue
-        items.append(summarize_experiment(experiment))
+        summary = summarize_experiment(experiment)
+        items.append(summary)
 
     if _json_output:
         print_json(items)
@@ -1715,10 +1650,9 @@ def _tune_status_list(namespace: str) -> None:
         best = ""
         if item.get("best_value") is not None:
             best = f"{float(item['best_value']):.4f}"
-        exp_name = item.get("experiment_name", "")
         rows.append((
-            exp_name[:8] if len(exp_name) > 16 else exp_name,
-            item.get("tune_name", "") or "",
+            short_id(item["id"]),
+            item.get("name", "") or "",
             style_run_state(item["state"] or "UNKNOWN"),
             best,
             f"{item.get('n_completed', 0)}/{item.get('n_trials', 0)}",
@@ -1726,92 +1660,64 @@ def _tune_status_list(namespace: str) -> None:
         ))
     print_table(
         title="Tune Experiments",
-        columns=["ID", "TUNE", "STATE", "BEST", "TRIALS", "CREATED"],
+        columns=["ID", "NAME", "STATE", "BEST", "TRIALS", "CREATED"],
         rows=rows,
     )
 
 
-def _tune_status_get(experiment_name: str, namespace: str) -> None:
+@tune_app.command("get")
+def cmd_tune_get(
+    experiment_id: str = typer.Argument(..., help="Tune experiment ID or unique prefix."),
+    namespace: str = typer.Option(
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
+    ),
+) -> None:
     """Show detailed info for one managed Katib tune experiment."""
     from kfp_workflow.cli.output import print_json, print_kv, style_run_state
     from kfp_workflow.tune.history import (
-        extract_tune_spec,
-        resolve_results,
         resolve_tune_experiment,
-        summarize_experiment,
     )
 
     try:
-        experiment = resolve_tune_experiment(experiment_name, namespace)
+        experiment = resolve_tune_experiment(experiment_id, namespace)
     except LookupError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
 
-    tune_spec = extract_tune_spec(experiment) or {}
-    summary = summarize_experiment(experiment)
-    payload = {
-        "experiment_name": summary["experiment_name"],
-        "tune_name": summary.get("tune_name", summary["experiment_name"]),
-        "namespace": namespace,
-        "state": summary["state"],
-        "created_at": summary["created_at"],
-        "finished_at": summary["finished_at"],
-        "best_value": summary.get("best_value"),
-        "best_params": summary.get("best_params", {}),
-        "n_trials": summary.get("n_trials"),
-        "n_completed": summary.get("n_completed"),
-        "n_pruned": summary.get("n_pruned"),
-        "n_failed": summary.get("n_failed"),
-    }
-
-    try:
-        results = resolve_results(
-            experiment=experiment,
-            tune_spec=tune_spec,
-            namespace=namespace,
-        )
-        payload["results_path"] = results["results_path"]
-        payload["results_summary"] = results["summary"]
-        payload["result_payload"] = results["payload"]
-        if results["payload"].get("best_params"):
-            payload["best_params"] = results["payload"]["best_params"]
-        if results["payload"].get("best_value") is not None:
-            payload["best_value"] = results["payload"]["best_value"]
-    except Exception as exc:
-        payload["results_error"] = str(exc)
+    payload = _tune_detail_payload(experiment, namespace)
 
     if _json_output:
         print_json(payload)
         return
 
     pairs = [
-        ("Tune", payload["tune_name"] or ""),
-        ("Experiment", payload["experiment_name"] or ""),
+        ("Tune", payload["name"] or ""),
+        ("Experiment", payload["id"] or ""),
         ("Namespace", payload["namespace"] or ""),
         ("State", style_run_state(payload["state"] or "UNKNOWN")),
         ("Created", payload["created_at"] or ""),
         ("Finished", payload["finished_at"] or ""),
         ("Best Value", "" if payload.get("best_value") is None else str(payload["best_value"])),
-        ("Trials", f"{payload.get('n_completed', 0)}/{payload.get('n_trials', 0)} completed"),
-        ("Pruned", str(payload.get("n_pruned", 0))),
-        ("Failed", str(payload.get("n_failed", 0))),
+        ("Trials", f"{payload['trials'].get('completed', 0)}/{payload['trials'].get('total', 0)} completed"),
+        ("Pruned", str(payload["trials"].get("pruned", 0))),
+        ("Failed", str(payload["trials"].get("failed", 0))),
     ]
-    if "results_path" in payload:
-        pairs.append(("Results Path", payload["results_path"]))
-    if "results_error" in payload:
-        pairs.append(("Results Error", payload["results_error"]))
+    if payload.get("results", {}).get("path"):
+        pairs.append(("Results Path", payload["results"]["path"]))
+    if payload.get("results", {}).get("error"):
+        pairs.append(("Results Error", payload["results"]["error"]))
     print_kv(pairs)
     if payload.get("best_params"):
         typer.echo("\nBest parameters:")
         typer.echo(json.dumps(payload["best_params"], indent=2, default=str))
 
 
-@tune_app.command("results")
-def cmd_tune_results(
-    experiment_name: str = typer.Argument(..., help="Experiment name or ID prefix."),
+@tune_app.command("download")
+def cmd_tune_download(
+    experiment_id: str = typer.Argument(..., help="Tune experiment ID or unique prefix."),
     output: Optional[Path] = typer.Option(None, help="Write results JSON to this path."),
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
     ),
     from_pvc: bool = typer.Option(
         False, "--from-pvc",
@@ -1833,12 +1739,12 @@ def cmd_tune_results(
     from kfp_workflow.utils import dump_json, ensure_parent
 
     try:
-        experiment = resolve_tune_experiment(experiment_name, namespace)
+        experiment = resolve_tune_experiment(experiment_id, namespace)
     except LookupError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
 
-    resolved_name = experiment.get("metadata", {}).get("name", experiment_name)
+    resolved_name = experiment.get("metadata", {}).get("name", experiment_id)
     tune_spec = extract_tune_spec(experiment) or {}
     tune_name = extract_tune_name(experiment)
     results = resolve_results(
@@ -1865,8 +1771,9 @@ def cmd_tune_results(
             typer.echo("No best params to apply.", err=True)
 
     payload = {
-        "experiment_name": resolved_name,
-        "tune_name": tune_name,
+        "id": resolved_name,
+        "name": tune_name,
+        "namespace": namespace,
         "results_path": results["results_path"],
         "output_path": str(destination),
     }
@@ -1874,7 +1781,7 @@ def cmd_tune_results(
         print_json(payload)
         return
 
-    typer.echo(f"Tune results downloaded to {destination}")
+    typer.echo(f"Downloaded tune results to {destination}")
 
 
 @tune_app.command("space")
@@ -1916,9 +1823,9 @@ def cmd_tune_space(
 
 @tune_app.command("logs")
 def cmd_tune_logs(
-    experiment_name: str = typer.Argument(..., help="Experiment name or ID prefix."),
+    experiment_id: str = typer.Argument(..., help="Tune experiment ID or unique prefix."),
     namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
+        DEFAULT_NAMESPACE, help="Kubernetes namespace.",
     ),
     all_trials: bool = typer.Option(
         False, "--all", help="Show logs for all trials, not just failed ones.",
@@ -1938,12 +1845,12 @@ def cmd_tune_logs(
     )
 
     try:
-        experiment = resolve_tune_experiment(experiment_name, namespace)
+        experiment = resolve_tune_experiment(experiment_id, namespace)
     except LookupError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
 
-    resolved_name = experiment.get("metadata", {}).get("name", experiment_name)
+    resolved_name = experiment.get("metadata", {}).get("name", experiment_id)
     failed_only = not all_trials and trial is None
 
     entries = get_trial_logs(
@@ -1955,7 +1862,14 @@ def cmd_tune_logs(
     )
 
     if _json_output:
-        print_json(entries)
+        print_json([{
+            "id": resolved_name,
+            "name": entry["trial_name"],
+            "namespace": namespace,
+            "state": entry["phase"],
+            "pod_name": entry["pod_name"],
+            "logs": entry["logs"],
+        } for entry in entries])
         return
 
     if not entries:
@@ -1972,228 +1886,6 @@ def cmd_tune_logs(
         ))
         typer.echo(entry["logs"])
         typer.echo("")
-
-
-# -- Hidden aliases for old command names ----------------------------------
-
-
-@tune_app.command("list", hidden=True)
-def cmd_tune_list(
-    namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
-    ),
-) -> None:
-    """[Deprecated] Use 'tune status' instead."""
-    _tune_status_list(namespace)
-
-
-@tune_app.command("get", hidden=True)
-def cmd_tune_get(
-    experiment_name: str = typer.Argument(..., help="Experiment name or ID prefix."),
-    namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
-    ),
-) -> None:
-    """[Deprecated] Use 'tune status <name>' instead."""
-    _tune_status_get(experiment_name, namespace)
-
-
-@tune_app.command("download", hidden=True)
-def cmd_tune_download(
-    experiment_name: str = typer.Argument(..., help="Experiment name or ID prefix."),
-    output: Optional[Path] = typer.Option(None, help="Write results JSON to this path."),
-    namespace: str = typer.Option(
-        "kubeflow-user-example-com", help="Kubernetes namespace.",
-    ),
-) -> None:
-    """[Deprecated] Use 'tune results' instead."""
-    from kfp_workflow.cli.output import print_json
-    from kfp_workflow.tune.history import (
-        extract_tune_name,
-        extract_tune_spec,
-        resolve_results,
-        resolve_tune_experiment,
-    )
-    from kfp_workflow.utils import dump_json, ensure_parent
-
-    try:
-        experiment = resolve_tune_experiment(experiment_name, namespace)
-    except LookupError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1)
-
-    resolved_name = experiment.get("metadata", {}).get("name", experiment_name)
-    tune_spec = extract_tune_spec(experiment) or {}
-    tune_name = extract_tune_name(experiment)
-    results = resolve_results(
-        experiment=experiment,
-        tune_spec=tune_spec,
-        namespace=namespace,
-    )
-    destination = output or Path.cwd() / f"{tune_name}-{experiment_name}.json"
-    ensure_parent(destination)
-    dump_json(results["payload"], destination)
-
-    payload = {
-        "experiment_name": experiment_name,
-        "tune_name": tune_name,
-        "results_path": results["results_path"],
-        "output_path": str(destination),
-    }
-    if _json_output:
-        print_json(payload)
-        return
-
-    typer.echo(f"Tune results downloaded to {destination}")
-
-
-@tune_app.command("run", hidden=True)
-def cmd_tune_run(
-    spec: Path = typer.Option(..., help="Path to a tune YAML spec."),
-    set_values: List[str] = typer.Option(
-        [], "--set",
-        help="Override spec values (e.g., --set hpo.algorithm=tpe).",
-    ),
-    data_mount_path: Optional[str] = typer.Option(
-        None, help="Override data mount path (default: from spec).",
-    ),
-    output: Optional[Path] = typer.Option(
-        None, help="Write best params JSON to this file.",
-    ),
-) -> None:
-    """[Deprecated] Run local hyperparameter optimisation using Optuna.
-
-    Use 'tune katib' for distributed HPO on the cluster instead.
-    """
-    typer.echo(
-        "Warning: 'tune run' is deprecated and will be removed in a future "
-        "release. Use 'tune katib' for distributed HPO on the cluster.",
-        err=True,
-    )
-    from kfp_workflow.plugins import get_plugin
-    from kfp_workflow.specs import load_tune_spec_with_overrides
-    from kfp_workflow.tune.engine import run_hpo
-
-    loaded = load_tune_spec_with_overrides(spec, set_values or None)
-    _validate_plugin_config_or_exit(loaded.model_dump())
-    plugin = get_plugin(loaded.model.name)
-    mount = data_mount_path or loaded.storage.data_mount_path
-
-    result = run_hpo(plugin, loaded, mount)
-
-    if output:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(result.model_dump(), indent=2, default=str))
-        typer.echo(f"Results written to {output}")
-
-    if _json_output:
-        from kfp_workflow.cli.output import print_json
-        print_json(result.model_dump())
-    else:
-        from kfp_workflow.cli.output import print_kv
-        print_kv([
-            ("Best value", f"{result.best_value:.4f}"),
-            ("Trials", f"{result.n_completed}/{result.n_trials} completed"),
-            ("Pruned", str(result.n_pruned)),
-            ("Failed", str(result.n_failed)),
-            ("Wall time", f"{result.wall_time_seconds:.1f}s"),
-        ])
-        typer.echo("\nBest parameters:")
-        typer.echo(json.dumps(result.best_params, indent=2, default=str))
-
-
-def _generate_experiment_name(tune_name: str) -> str:
-    """Generate a unique Katib experiment name from the logical tune name."""
-    import uuid as _uuid
-    suffix = _uuid.uuid4().hex[:8]
-    return f"{tune_name}-{suffix}"
-
-
-@tune_app.command("katib", hidden=True)
-def cmd_tune_katib(
-    spec: Path = typer.Option(..., help="Path to a tune YAML spec."),
-    set_values: List[str] = typer.Option(
-        [], "--set",
-        help="Override spec values (e.g., --set hpo.max_trials=30).",
-    ),
-    output: Optional[Path] = typer.Option(
-        None, help="Write Katib manifest YAML to this file.",
-    ),
-    dry_run: bool = typer.Option(
-        False, help="Print manifest without applying to the cluster.",
-    ),
-) -> None:
-    """Generate or apply a Katib Experiment manifest for distributed HPO."""
-    import yaml as pyyaml
-
-    from kfp_workflow.plugins import get_plugin
-    from kfp_workflow.specs import load_tune_spec_with_overrides
-    from kfp_workflow.tune.engine import resolve_search_space
-    from kfp_workflow.tune.katib import (
-        build_katib_experiment,
-        _trial_parameters_json,
-    )
-
-    loaded = load_tune_spec_with_overrides(spec, set_values or None)
-    _validate_plugin_config_or_exit(loaded.model_dump())
-    plugin = get_plugin(loaded.model.name)
-    search_space = resolve_search_space(plugin, loaded.model_dump())
-
-    # Generate a unique experiment name for each submission so that
-    # experiments never collide, consistent with pipeline/benchmark run IDs.
-    experiment_name = _generate_experiment_name(loaded.metadata.name)
-
-    trial_command = [
-        "python", "-m", "kfp_workflow.cli.main",
-        "tune", "trial",
-        "--data-mount-path", loaded.storage.data_mount_path,
-        "--experiment-name", experiment_name,
-        "--namespace", loaded.runtime.namespace,
-        "--results-mount-path", loaded.storage.results_mount_path,
-    ]
-    # Pass JSON payloads via environment variables instead of CLI args.
-    # The Katib metrics-collector webhook wraps the container command
-    # with ``sh -c``, which destroys un-quoted JSON on the command line.
-    trial_env = {
-        "KFP_WORKFLOW_TUNE_SPEC_JSON": loaded.model_dump_json(),
-        "KFP_WORKFLOW_TUNE_TRIAL_PARAMS_JSON": _trial_parameters_json(
-            search_space,
-        ),
-    }
-    manifest = build_katib_experiment(
-        loaded,
-        search_space,
-        trial_image=loaded.runtime.image,
-        trial_command=trial_command,
-        trial_env=trial_env,
-        experiment_name=experiment_name,
-    )
-
-    manifest_yaml = pyyaml.dump(manifest, default_flow_style=False, sort_keys=False)
-
-    if output:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(manifest_yaml)
-        typer.echo(f"Katib manifest written to {output}")
-
-    if dry_run or _json_output:
-        if _json_output:
-            from kfp_workflow.cli.output import print_json
-            print_json(manifest)
-        else:
-            typer.echo(manifest_yaml)
-        if dry_run:
-            return
-
-    _run_kubectl(
-        ["kubectl", "create", "-f", "-"],
-        input_text=json.dumps(manifest),
-    )
-
-    typer.echo(
-        f"Tune experiment '{experiment_name}' submitted "
-        f"to namespace '{loaded.runtime.namespace}'."
-    )
 
 
 @tune_app.command("trial", hidden=True)
@@ -2288,44 +1980,6 @@ def cmd_tune_trial(
 
     _persist("completed", objective_value=float(objective_value))
     typer.echo(f"objective={float(objective_value)}")
-
-
-@tune_app.command("show-space", hidden=True)
-def cmd_tune_show_space(
-    spec: Path = typer.Option(..., help="Path to a tune YAML spec."),
-    set_values: List[str] = typer.Option(
-        [], "--set",
-        help="Override spec values (e.g., --set hpo.builtin_profile=aggressive).",
-    ),
-) -> None:
-    """Display the resolved search space for a tune spec."""
-    from kfp_workflow.cli.output import print_json, print_table
-    from kfp_workflow.plugins import get_plugin
-    from kfp_workflow.specs import load_tune_spec_with_overrides
-    from kfp_workflow.tune.engine import resolve_search_space
-
-    loaded = load_tune_spec_with_overrides(spec, set_values or None)
-    _validate_plugin_config_or_exit(loaded.model_dump())
-    plugin = get_plugin(loaded.model.name)
-    space = resolve_search_space(plugin, loaded.model_dump())
-
-    if _json_output:
-        print_json([p.model_dump() for p in space])
-        return
-
-    rows = []
-    for p in space:
-        if p.type == "categorical":
-            detail = ", ".join(str(v) for v in (p.values or []))
-        else:
-            detail = f"[{p.low}, {p.high}]"
-            if p.step:
-                detail += f" step={p.step}"
-            if p.type == "log_float":
-                detail += " (log)"
-        rows.append((p.name, p.type, detail))
-    print_table("Search Space", ["NAME", "TYPE", "RANGE / VALUES"], rows)
-
 
 # ---------------------------------------------------------------------------
 # Entry point for `python -m kfp_workflow.cli.main`

@@ -206,8 +206,8 @@ def test_tune_trial_persists_result_payload(tmp_path, monkeypatch):
     assert payload["params"]["base_only"] == 1
 
 
-def test_tune_katib_generates_unique_experiment_name(monkeypatch):
-    """Each tune katib submission generates a unique experiment name."""
+def test_tune_submit_generates_unique_experiment_id(monkeypatch):
+    """Each tune submission generates a unique opaque backend experiment ID."""
     calls: list[tuple[str, ...]] = []
 
     class DummyPlugin:
@@ -227,7 +227,7 @@ def test_tune_katib_generates_unique_experiment_name(monkeypatch):
         app,
         [
             "tune",
-            "katib",
+            "submit",
             "--spec",
             "configs/tuning/mambasl_cmapss_tune.yaml",
         ],
@@ -236,9 +236,7 @@ def test_tune_katib_generates_unique_experiment_name(monkeypatch):
     assert result.exit_code == 0
     # Should use 'kubectl create' (not 'apply') since names are always unique
     assert calls[0][:3] == ("kubectl", "create", "-f")
-    # Experiment name should start with the tune name and have a unique suffix
-    assert "mambasl-cmapss-hpo-" in result.output
-    assert "submitted" in result.output
+    assert "Submitted tune experiment" in result.output
 
     # Running again should produce a different experiment name
     calls.clear()
@@ -246,15 +244,19 @@ def test_tune_katib_generates_unique_experiment_name(monkeypatch):
         app,
         [
             "tune",
-            "katib",
+            "submit",
             "--spec",
             "configs/tuning/mambasl_cmapss_tune.yaml",
         ],
     )
     assert result2.exit_code == 0
     # Extract experiment names from outputs and verify they differ
-    name1 = result.output.split("'")[1]
-    name2 = result2.output.split("'")[1]
+    name1 = result.output.strip().rsplit(": ", 1)[1]
+    name2 = result2.output.strip().rsplit(": ", 1)[1]
     assert name1 != name2
-    assert name1.startswith("mambasl-cmapss-hpo-")
-    assert name2.startswith("mambasl-cmapss-hpo-")
+    assert len(name1) == 16
+    assert len(name2) == 16
+    assert all(ch in "0123456789abcdef" for ch in name1)
+    assert all(ch in "0123456789abcdef" for ch in name2)
+    assert name1[0] in "abcdef"
+    assert name2[0] in "abcdef"

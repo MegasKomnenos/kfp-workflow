@@ -188,8 +188,8 @@ def summarize_experiment(experiment: Dict[str, Any]) -> Dict[str, Any]:
     best = _current_optimal_trial(status)
     counts = _status_counts(status)
     return {
-        "experiment_name": metadata.get("name", ""),
-        "tune_name": extract_tune_name(experiment),
+        "id": metadata.get("name", ""),
+        "name": extract_tune_name(experiment),
         "state": _experiment_state(experiment),
         "created_at": metadata.get("creationTimestamp", ""),
         "finished_at": status.get("completionTime", ""),

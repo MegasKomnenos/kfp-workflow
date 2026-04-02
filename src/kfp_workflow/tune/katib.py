@@ -96,8 +96,8 @@ def build_katib_experiment(
     experiment_name:
         Unique Katib Experiment name.  When *None* (legacy behaviour)
         falls back to ``spec.metadata.name``.  Callers should pass a
-        name with a unique suffix (e.g. ``mambasl-cmapss-hpo-a3f8b2c1``)
-        so that each submission creates a new experiment.
+        unique backend ID (for example ``af3f8b2c14d9e701``) so that
+        each submission creates a new experiment.
     """
     env: List[Dict[str, Any]] = [
         {

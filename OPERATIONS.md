@@ -88,17 +88,17 @@ kfp-workflow pipeline submit \
 Common run management:
 
 ```bash
-kfp-workflow pipeline run list
-kfp-workflow pipeline run get <run-id-or-prefix>
-kfp-workflow pipeline run wait <run-id-or-prefix>
-kfp-workflow pipeline run logs <run-id-or-prefix>
-kfp-workflow pipeline run terminate <run-id-or-prefix>
+kfp-workflow pipeline list
+kfp-workflow pipeline get <run-id-or-prefix>
+kfp-workflow pipeline wait <run-id-or-prefix>
+kfp-workflow pipeline logs <run-id-or-prefix>
+kfp-workflow pipeline terminate <run-id-or-prefix>
 ```
 
 Experiment listing:
 
 ```bash
-kfp-workflow pipeline experiment list
+kfp-workflow pipeline list-experiments
 ```
 
 ## Serving Workflow
@@ -123,8 +123,8 @@ Inspect and remove:
 
 ```bash
 kfp-workflow serve list
-kfp-workflow serve get --name mambasl-cmapss-serving
-kfp-workflow serve delete --name mambasl-cmapss-serving
+kfp-workflow serve get mambasl-cmapss-serving
+kfp-workflow serve delete mambasl-cmapss-serving
 ```
 
 Notes:
@@ -174,7 +174,7 @@ kfp-workflow tune space --spec configs/tuning/mambasl_cmapss_tune.yaml
 Preview the generated Katib manifest:
 
 ```bash
-kfp-workflow tune \
+kfp-workflow tune submit \
   --spec configs/tuning/mambasl_cmapss_tune.yaml \
   --dry-run
 ```
@@ -182,7 +182,7 @@ kfp-workflow tune \
 Submit and wait:
 
 ```bash
-kfp-workflow tune \
+kfp-workflow tune submit \
   --spec configs/tuning/mambasl_cmapss_tune.yaml \
   --wait
 ```
@@ -190,24 +190,24 @@ kfp-workflow tune \
 Inspect progress and fetch results:
 
 ```bash
-kfp-workflow tune status
-kfp-workflow tune status <experiment-id-or-prefix>
+kfp-workflow tune list
+kfp-workflow tune get <experiment-id-or-prefix>
 kfp-workflow tune logs <experiment-id-or-prefix>
-kfp-workflow tune results <experiment-id-or-prefix>
+kfp-workflow tune download <experiment-id-or-prefix>
 ```
 
 Apply best parameters into an existing pipeline spec:
 
 ```bash
-kfp-workflow tune results <experiment-id-or-prefix> \
+kfp-workflow tune download <experiment-id-or-prefix> \
   --apply-best configs/pipelines/mambasl_cmapss_smoke.yaml
 ```
 
 Important behavior:
 
-- The supported user-facing entrypoint is `kfp-workflow tune --spec ...`.
-- Each submission gets a generated Katib experiment ID; the logical tune name is preserved in annotations and result payloads.
-- Hidden commands such as `tune run`, `tune katib`, and `tune show-space` remain compatibility paths and are not the preferred public workflow.
+- The supported user-facing entrypoint is `kfp-workflow tune submit --spec ...`.
+- Each submission gets a generated opaque Katib experiment ID; the logical tune name is preserved separately in annotations and JSON output.
+- The public tune surface is `submit`, `list`, `get`, `download`, `space`, and `logs`.
 
 ## Cluster Bootstrap
 
@@ -264,7 +264,7 @@ If the cluster cannot pull from a registry, use the helper-pod import flow alrea
 
 ## Auth and Connection Notes
 
-- Root `pipeline submit`, `benchmark submit`, and run listing commands can use `--host`, `--user`, `--existing-token`, and `--cookies`.
+- Root `pipeline submit`, `benchmark submit`, `pipeline list|get|wait|terminate|logs`, and benchmark history commands can use `--host`, `--user`, `--existing-token`, and `--cookies`.
 - When `host` is left at the default local address, the client code uses the port-forward settings in the spec runtime block.
 - The default spec runtime values are defined in [src/kfp_workflow/specs.py](/home/scouter/proj_2026_1_etri/test/src/kfp_workflow/specs.py).
 

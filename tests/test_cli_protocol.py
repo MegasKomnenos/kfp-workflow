@@ -63,7 +63,7 @@ def test_serve_create_help():
 def test_serve_delete_help():
     result = runner.invoke(app, ["serve", "delete", "--help"])
     assert result.exit_code == 0
-    assert "--name" in result.output
+    assert "NAME" in result.output
 
 
 def test_registry_model_register_help():
@@ -106,38 +106,38 @@ def test_pipeline_submit_has_user_option():
     assert "--user" in result.output
 
 
-def test_pipeline_run_get_help():
-    result = runner.invoke(app, ["pipeline", "run", "get", "--help"])
+def test_pipeline_get_help():
+    result = runner.invoke(app, ["pipeline", "get", "--help"])
     assert result.exit_code == 0
     assert "run-id" in result.output.lower() or "RUN_ID" in result.output
 
 
-def test_pipeline_run_list_help():
-    result = runner.invoke(app, ["pipeline", "run", "list", "--help"])
+def test_pipeline_list_help():
+    result = runner.invoke(app, ["pipeline", "list", "--help"])
     assert result.exit_code == 0
     assert "--namespace" in result.output
 
 
-def test_pipeline_run_wait_help():
-    result = runner.invoke(app, ["pipeline", "run", "wait", "--help"])
+def test_pipeline_wait_help():
+    result = runner.invoke(app, ["pipeline", "wait", "--help"])
     assert result.exit_code == 0
     assert "--timeout" in result.output
 
 
-def test_pipeline_run_terminate_help():
-    result = runner.invoke(app, ["pipeline", "run", "terminate", "--help"])
+def test_pipeline_terminate_help():
+    result = runner.invoke(app, ["pipeline", "terminate", "--help"])
     assert result.exit_code == 0
     assert "run-id" in result.output.lower() or "RUN_ID" in result.output
 
 
-def test_pipeline_run_logs_help():
-    result = runner.invoke(app, ["pipeline", "run", "logs", "--help"])
+def test_pipeline_logs_help():
+    result = runner.invoke(app, ["pipeline", "logs", "--help"])
     assert result.exit_code == 0
     assert "--step" in result.output
 
 
-def test_pipeline_experiment_list_help():
-    result = runner.invoke(app, ["pipeline", "experiment", "list", "--help"])
+def test_pipeline_list_experiments_help():
+    result = runner.invoke(app, ["pipeline", "list-experiments", "--help"])
     assert result.exit_code == 0
     assert "--namespace" in result.output
 
@@ -151,13 +151,19 @@ def test_tune_list_help():
 def test_tune_get_help():
     result = runner.invoke(app, ["tune", "get", "--help"])
     assert result.exit_code == 0
-    assert "experiment-name" in result.output.lower() or "EXPERIMENT_NAME" in result.output
+    assert "experiment-id" in result.output.lower() or "EXPERIMENT_ID" in result.output
 
 
 def test_tune_download_help():
     result = runner.invoke(app, ["tune", "download", "--help"])
     assert result.exit_code == 0
     assert "--output" in result.output
+
+
+def test_tune_submit_help():
+    result = runner.invoke(app, ["tune", "submit", "--help"])
+    assert result.exit_code == 0
+    assert "--spec" in result.output
 
 
 def test_serve_list_help():
@@ -169,4 +175,4 @@ def test_serve_list_help():
 def test_serve_get_help():
     result = runner.invoke(app, ["serve", "get", "--help"])
     assert result.exit_code == 0
-    assert "--name" in result.output
+    assert "NAME" in result.output

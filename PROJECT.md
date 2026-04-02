@@ -33,7 +33,7 @@ test/
 │   └── build_image.sh       # Helper for container image builds
 ├── src/
 │   └── kfp_workflow/
-│       ├── cli/             # Typer CLI and output formatting
+│       ├── cli/             # Typer CLI, shared workflow helpers, and output formatting
 │       ├── pipeline/        # Training pipeline compile and submit logic
 │       ├── benchmark/       # Benchmark compile, runtime, history, result handling
 │       ├── components/      # KFP pipeline component entrypoints

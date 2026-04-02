@@ -57,8 +57,8 @@ The canonical public command tree is maintained in [CLI_COMMAND_TREE.md](/home/s
 Use that file for:
 
 - exact command nesting
-- callback-style `tune` submission behavior
-- public versus intentionally undocumented hidden commands
+- the current flat workflow-domain command layout
+- backend-ID-first tune and workflow command behavior
 - key required args and high-signal options per command
 
 ## Core Workflows
@@ -89,22 +89,21 @@ Serving specs live under `configs/serving/` and create KServe `InferenceService`
 ```bash
 kfp-workflow serve create --spec configs/serving/mambasl_cmapss_serve.yaml --wait
 kfp-workflow serve list
-kfp-workflow serve get --name mambasl-cmapss-serving
+kfp-workflow serve get mambasl-cmapss-serving
 ```
 
 ### 3. Hyperparameter tuning
 
-Tune specs live under `configs/tuning/`. The default user-facing flow is Katib submission via `kfp-workflow tune --spec ...`.
+Tune specs live under `configs/tuning/`. The public root flow is explicit Katib submission via `kfp-workflow tune submit --spec ...`.
 
 ```bash
 kfp-workflow tune space --spec configs/tuning/mambasl_cmapss_tune.yaml
-kfp-workflow tune --spec configs/tuning/mambasl_cmapss_tune.yaml --dry-run
-kfp-workflow tune --spec configs/tuning/mambasl_cmapss_tune.yaml --wait
-kfp-workflow tune status
-kfp-workflow tune results <experiment-id-prefix>
+kfp-workflow tune submit --spec configs/tuning/mambasl_cmapss_tune.yaml --dry-run
+kfp-workflow tune submit --spec configs/tuning/mambasl_cmapss_tune.yaml --wait
+kfp-workflow tune list
+kfp-workflow tune get <experiment-id-prefix>
+kfp-workflow tune download <experiment-id-prefix>
 ```
-
-The hidden legacy aliases `tune run`, `tune katib`, and `tune show-space` still exist for compatibility, but the documentation treats them as internal or deprecated.
 
 ### 4. Benchmarks
 
@@ -145,6 +144,7 @@ kfp-workflow pipeline compile \
 - Root package requires Python `>=3.10`
 - The unified Docker image is built from [docker/Dockerfile](/home/scouter/proj_2026_1_etri/test/docker/Dockerfile)
 - `cluster bootstrap` creates PVCs for pipeline, benchmark, or tune storage from a spec
+- Tune submissions generate opaque Katib experiment IDs; the logical tune name stays visible as a separate `name` field in JSON output
 
 ## Tutorials
 

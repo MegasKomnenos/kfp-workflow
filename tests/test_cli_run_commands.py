@@ -50,10 +50,10 @@ def _not_found() -> ApiException:
 
 
 # ---------------------------------------------------------------------------
-# pipeline run get
+# pipeline get
 # ---------------------------------------------------------------------------
 
-@patch("kfp_workflow.cli.main._find_workflow_for_run")
+@patch("kfp_workflow.cli.main.find_workflow_for_run")
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
 def test_run_get(mock_conn, mock_workflow):
     mock_client = MagicMock()
@@ -62,14 +62,14 @@ def test_run_get(mock_conn, mock_workflow):
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
     mock_workflow.return_value = None
 
-    result = runner.invoke(app, ["pipeline", "run", "get", "abc-12345-def"])
+    result = runner.invoke(app, ["pipeline", "get", "abc-12345-def"])
     assert result.exit_code == 0
     assert "abc-12345-def" in result.output
     assert "SUCCEEDED" in result.output
     mock_client.get_run.assert_called_once_with(run_id="abc-12345-def")
 
 
-@patch("kfp_workflow.cli.main._find_workflow_for_run")
+@patch("kfp_workflow.cli.main.find_workflow_for_run")
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
 def test_run_get_json(mock_conn, mock_workflow):
     mock_client = MagicMock()
@@ -81,15 +81,15 @@ def test_run_get_json(mock_conn, mock_workflow):
         "status": {"phase": "Succeeded", "progress": "5/5"},
     }
 
-    result = runner.invoke(app, ["--json", "pipeline", "run", "get", "abc-12345-def"])
+    result = runner.invoke(app, ["--json", "pipeline", "get", "abc-12345-def"])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data["run_id"] == "abc-12345-def"
+    assert data["id"] == "abc-12345-def"
     assert data["state"] == "SUCCEEDED"
-    assert data["workflow_name"] == "workflow-123"
+    assert data["workflow"]["name"] == "workflow-123"
 
 
-@patch("kfp_workflow.cli.main._find_workflow_for_run")
+@patch("kfp_workflow.cli.main.find_workflow_for_run")
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
 def test_run_get_resolves_unique_short_prefix(mock_conn, mock_workflow):
     mock_client = MagicMock()
@@ -103,14 +103,14 @@ def test_run_get_resolves_unique_short_prefix(mock_conn, mock_workflow):
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
     mock_workflow.return_value = None
 
-    result = runner.invoke(app, ["pipeline", "run", "get", "abc"])
+    result = runner.invoke(app, ["pipeline", "get", "abc"])
     assert result.exit_code == 0
     assert "abc-12345-def" in result.output
     assert mock_client.get_run.call_args_list[-1].kwargs == {"run_id": "abc-12345-def"}
 
 
 # ---------------------------------------------------------------------------
-# pipeline run list
+# pipeline list
 # ---------------------------------------------------------------------------
 
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
@@ -122,9 +122,9 @@ def test_run_list(mock_conn):
     mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
 
-    result = runner.invoke(app, ["pipeline", "run", "list"])
+    result = runner.invoke(app, ["pipeline", "list"])
     assert result.exit_code == 0
-    assert "abc-1234" in result.output
+    assert "abc-12345-de" in result.output
     assert "xyz-999" in result.output
 
 
@@ -137,12 +137,12 @@ def test_run_list_empty(mock_conn):
     mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
 
-    result = runner.invoke(app, ["pipeline", "run", "list"])
+    result = runner.invoke(app, ["pipeline", "list"])
     assert result.exit_code == 0
 
 
 # ---------------------------------------------------------------------------
-# pipeline run terminate
+# pipeline terminate
 # ---------------------------------------------------------------------------
 
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
@@ -152,9 +152,9 @@ def test_run_terminate(mock_conn):
     mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
 
-    result = runner.invoke(app, ["pipeline", "run", "terminate", "abc-12345-def"])
+    result = runner.invoke(app, ["pipeline", "terminate", "abc-12345-def"])
     assert result.exit_code == 0
-    assert "terminated" in result.output
+    assert "Terminated pipeline run" in result.output
     mock_client.terminate_run.assert_called_once_with("abc-12345-def")
 
 
@@ -170,16 +170,16 @@ def test_run_terminate_resolves_unique_short_prefix(mock_conn):
     mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
 
-    result = runner.invoke(app, ["pipeline", "run", "terminate", "abc"])
+    result = runner.invoke(app, ["pipeline", "terminate", "abc"])
     assert result.exit_code == 0
     mock_client.terminate_run.assert_called_once_with("abc-12345-def")
 
 
 # ---------------------------------------------------------------------------
-# pipeline run wait
+# pipeline wait
 # ---------------------------------------------------------------------------
 
-@patch("kfp_workflow.cli.main._find_workflow_for_run")
+@patch("kfp_workflow.cli.main.find_workflow_for_run")
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
 def test_run_wait_success(mock_conn, mock_workflow):
     mock_client = MagicMock()
@@ -192,13 +192,13 @@ def test_run_wait_success(mock_conn, mock_workflow):
         "status": {"phase": "Succeeded", "progress": "5/5"},
     }
 
-    result = runner.invoke(app, ["pipeline", "run", "wait", "abc-12345-def"])
+    result = runner.invoke(app, ["pipeline", "wait", "abc-12345-def"])
     assert result.exit_code == 0
     assert "SUCCEEDED" in result.output
     assert "workflow-123" in result.output
 
 
-@patch("kfp_workflow.cli.main._find_workflow_for_run")
+@patch("kfp_workflow.cli.main.find_workflow_for_run")
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
 def test_run_wait_failure(mock_conn, mock_workflow):
     mock_client = MagicMock()
@@ -208,11 +208,11 @@ def test_run_wait_failure(mock_conn, mock_workflow):
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
     mock_workflow.return_value = None
 
-    result = runner.invoke(app, ["pipeline", "run", "wait", "abc-12345-def"])
+    result = runner.invoke(app, ["pipeline", "wait", "abc-12345-def"])
     assert result.exit_code == 1
 
 
-@patch("kfp_workflow.cli.main._find_workflow_for_run")
+@patch("kfp_workflow.cli.main.find_workflow_for_run")
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
 def test_run_wait_timeout_shows_workflow_diagnostics(mock_conn, mock_workflow):
     mock_client = MagicMock()
@@ -232,13 +232,13 @@ def test_run_wait_timeout_shows_workflow_diagnostics(mock_conn, mock_workflow):
         },
     }
 
-    result = runner.invoke(app, ["pipeline", "run", "wait", "abc-12345-def", "--timeout", "1"])
+    result = runner.invoke(app, ["pipeline", "wait", "abc-12345-def", "--timeout", "1"])
     assert result.exit_code == 1
     assert "workflow-123" in result.output
     assert "save-model" in result.output
 
 
-@patch("kfp_workflow.cli.main._find_workflow_for_run")
+@patch("kfp_workflow.cli.main.find_workflow_for_run")
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
 def test_run_wait_resolves_unique_short_prefix(mock_conn, mock_workflow):
     mock_client = MagicMock()
@@ -253,13 +253,13 @@ def test_run_wait_resolves_unique_short_prefix(mock_conn, mock_workflow):
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
     mock_workflow.return_value = None
 
-    result = runner.invoke(app, ["pipeline", "run", "wait", "abc"])
+    result = runner.invoke(app, ["pipeline", "wait", "abc"])
     assert result.exit_code == 0
     mock_client.wait_for_run_completion.assert_called_once_with("abc-12345-def", timeout=3600)
 
 
 # ---------------------------------------------------------------------------
-# pipeline experiment list
+# pipeline list-experiments
 # ---------------------------------------------------------------------------
 
 @patch("kfp_workflow.pipeline.connection.kfp_connection")
@@ -271,7 +271,7 @@ def test_experiment_list(mock_conn):
     mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
 
-    result = runner.invoke(app, ["pipeline", "experiment", "list"])
+    result = runner.invoke(app, ["pipeline", "list-experiments"])
     assert result.exit_code == 0
     assert "test-experiment" in result.output
 
@@ -289,7 +289,7 @@ def test_run_list_resolves_experiment_short_prefix(mock_conn):
     mock_conn.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_conn.return_value.__exit__ = MagicMock(return_value=False)
 
-    result = runner.invoke(app, ["pipeline", "run", "list", "--experiment-id", "exp-001"])
+    result = runner.invoke(app, ["pipeline", "list", "--experiment-id", "exp-001"])
     assert result.exit_code == 0
     assert "test-run" in result.output
     assert mock_client.list_runs.call_args.kwargs["experiment_id"] == "exp-001-full"
@@ -319,8 +319,8 @@ def test_benchmark_list(mock_conn, mock_find, mock_is_benchmark, mock_extract):
     result = runner.invoke(app, ["--json", "benchmark", "list"])
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload[0]["benchmark_name"] == "mambasl-cmapss-benchmark-smoke"
-    assert payload[0]["run_id"] == "bench-123"
+    assert payload[0]["name"] == "mambasl-cmapss-benchmark-smoke"
+    assert payload[0]["id"] == "bench-123"
 
 
 @patch("kfp_workflow.benchmark.history.resolve_results")
@@ -488,7 +488,7 @@ def test_serve_get(mock_get):
         "events": [],
     }
 
-    result = runner.invoke(app, ["serve", "get", "--name", "my-isvc"])
+    result = runner.invoke(app, ["serve", "get", "my-isvc"])
     assert result.exit_code == 0
     assert "my-isvc" in result.output
     assert "True" in result.output
@@ -509,11 +509,11 @@ def test_serve_get_json(mock_get):
         "events": [{"type": "Warning", "reason": "InternalError", "message": "bad host"}],
     }
 
-    result = runner.invoke(app, ["--json", "serve", "get", "--name", "my-isvc"])
+    result = runner.invoke(app, ["--json", "serve", "get", "my-isvc"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["name"] == "my-isvc"
-    assert data["ready"] == "True"
+    assert data["state"] == "True"
     assert data["events"][0]["reason"] == "InternalError"
 
 

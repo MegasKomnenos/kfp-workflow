@@ -42,7 +42,7 @@ def _experiment() -> dict:
     spec = _tune_spec()
     return {
         "metadata": {
-            "name": "mambasl-cmapss-hpo",
+            "name": "af3f8b2c14d9e701",
             "namespace": "kubeflow-user-example-com",
             "creationTimestamp": "2026-03-30T00:00:00Z",
             "labels": {
@@ -51,6 +51,7 @@ def _experiment() -> dict:
             },
             "annotations": {
                 "kfp-workflow/spec-json": json.dumps(spec),
+                "kfp-workflow/tune-name": "mambasl-cmapss-hpo",
             },
         },
         "status": {
@@ -164,15 +165,15 @@ def test_tune_download_cli(mock_extract, mock_get, mock_is_tune, mock_resolve, m
     mock_get.return_value = _experiment()
     mock_is_tune.return_value = True
     mock_resolve.return_value = {
-        "results_path": "/mnt/tune-results/tune-results/mambasl-cmapss-hpo/mambasl-cmapss-hpo/results.json",
+        "results_path": "/mnt/tune-results/tune-results/mambasl-cmapss-hpo/af3f8b2c14d9e701/results.json",
         "payload": {"status": "SUCCEEDED"},
         "summary": {"status": "SUCCEEDED"},
     }
 
-    result = runner.invoke(app, ["tune", "download", "mambasl-cmapss-hpo"])
+    result = runner.invoke(app, ["tune", "download", "af3f8b2c14d9e701"])
 
     assert result.exit_code == 0
-    assert "Tune results downloaded" in result.output
+    assert "Downloaded tune results" in result.output
     mock_dump.assert_called_once()
 
 
@@ -185,16 +186,17 @@ def test_tune_get_cli_json(mock_extract, mock_get, mock_is_tune, mock_resolve):
     mock_get.return_value = _experiment()
     mock_is_tune.return_value = True
     mock_resolve.return_value = {
-        "results_path": "/mnt/tune-results/tune-results/mambasl-cmapss-hpo/mambasl-cmapss-hpo/results.json",
+        "results_path": "/mnt/tune-results/tune-results/mambasl-cmapss-hpo/af3f8b2c14d9e701/results.json",
         "payload": {"best_params": {"lr": 0.001}, "best_value": 1.25},
         "summary": {"status": "SUCCEEDED", "best_value": 1.25},
     }
 
-    result = runner.invoke(app, ["--json", "tune", "get", "mambasl-cmapss-hpo"])
+    result = runner.invoke(app, ["--json", "tune", "get", "af3f8b2c14d9e701"])
 
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data["experiment_name"] == "mambasl-cmapss-hpo"
+    assert data["id"] == "af3f8b2c14d9e701"
+    assert data["name"] == "mambasl-cmapss-hpo"
     assert data["best_value"] == pytest.approx(1.25)
     assert data["best_params"]["lr"] == pytest.approx(0.001)
 
@@ -208,8 +210,8 @@ def test_tune_list_cli_json(mock_summary, mock_extract, mock_is_tune, mock_list)
     mock_is_tune.return_value = True
     mock_extract.return_value = _tune_spec()
     mock_summary.return_value = {
-        "experiment_name": "mambasl-cmapss-hpo",
-        "tune_name": "mambasl-cmapss-hpo",
+        "id": "af3f8b2c14d9e701",
+        "name": "mambasl-cmapss-hpo",
         "state": "SUCCEEDED",
         "created_at": "2026-03-30T00:00:00Z",
         "finished_at": "2026-03-30T01:00:00Z",
@@ -225,86 +227,8 @@ def test_tune_list_cli_json(mock_summary, mock_extract, mock_is_tune, mock_list)
 
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data[0]["experiment_name"] == "mambasl-cmapss-hpo"
-    assert data[0]["tune_name"] == "mambasl-cmapss-hpo"
-
-
-@patch("kfp_workflow.utils.dump_json")
-@patch("kfp_workflow.tune.history.resolve_results")
-@patch("kfp_workflow.tune.history.is_tune_experiment")
-@patch("kfp_workflow.tune.history.get_tune_experiment")
-@patch("kfp_workflow.tune.history.extract_tune_spec")
-def test_tune_results_cli(mock_extract, mock_get, mock_is_tune, mock_resolve, mock_dump):
-    """'tune results' is the canonical replacement for 'tune download'."""
-    mock_extract.return_value = _tune_spec()
-    mock_get.return_value = _experiment()
-    mock_is_tune.return_value = True
-    mock_resolve.return_value = {
-        "results_path": "/mnt/tune-results/tune-results/mambasl-cmapss-hpo/mambasl-cmapss-hpo/results.json",
-        "payload": {"status": "SUCCEEDED"},
-        "summary": {"status": "SUCCEEDED"},
-    }
-
-    result = runner.invoke(app, ["tune", "results", "mambasl-cmapss-hpo"])
-
-    assert result.exit_code == 0
-    assert "Tune results downloaded" in result.output
-    mock_dump.assert_called_once()
-
-
-@patch("kfp_workflow.tune.history.resolve_results")
-@patch("kfp_workflow.tune.history.is_tune_experiment")
-@patch("kfp_workflow.tune.history.get_tune_experiment")
-@patch("kfp_workflow.tune.history.extract_tune_spec")
-def test_tune_status_get_cli_json(mock_extract, mock_get, mock_is_tune, mock_resolve):
-    """'tune status <name>' is the canonical replacement for 'tune get'."""
-    mock_extract.return_value = _tune_spec()
-    mock_get.return_value = _experiment()
-    mock_is_tune.return_value = True
-    mock_resolve.return_value = {
-        "results_path": "/mnt/tune-results/tune-results/mambasl-cmapss-hpo/mambasl-cmapss-hpo/results.json",
-        "payload": {"best_params": {"lr": 0.001}, "best_value": 1.25},
-        "summary": {"status": "SUCCEEDED", "best_value": 1.25},
-    }
-
-    result = runner.invoke(app, ["--json", "tune", "status", "mambasl-cmapss-hpo"])
-
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert data["experiment_name"] == "mambasl-cmapss-hpo"
-    assert data["best_value"] == pytest.approx(1.25)
-    assert data["best_params"]["lr"] == pytest.approx(0.001)
-
-
-@patch("kfp_workflow.tune.history.list_tune_experiments")
-@patch("kfp_workflow.tune.history.is_tune_experiment")
-@patch("kfp_workflow.tune.history.extract_tune_spec")
-@patch("kfp_workflow.tune.history.summarize_experiment")
-def test_tune_status_list_cli_json(mock_summary, mock_extract, mock_is_tune, mock_list):
-    """'tune status' (no arg) is the canonical replacement for 'tune list'."""
-    mock_list.return_value = [_experiment()]
-    mock_is_tune.return_value = True
-    mock_extract.return_value = _tune_spec()
-    mock_summary.return_value = {
-        "experiment_name": "mambasl-cmapss-hpo",
-        "tune_name": "mambasl-cmapss-hpo",
-        "state": "SUCCEEDED",
-        "created_at": "2026-03-30T00:00:00Z",
-        "finished_at": "2026-03-30T01:00:00Z",
-        "best_value": 1.25,
-        "best_params": {"lr": 0.001},
-        "n_trials": 4,
-        "n_completed": 3,
-        "n_pruned": 0,
-        "n_failed": 1,
-    }
-
-    result = runner.invoke(app, ["--json", "tune", "status"])
-
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert data[0]["experiment_name"] == "mambasl-cmapss-hpo"
-    assert data[0]["tune_name"] == "mambasl-cmapss-hpo"
+    assert data[0]["id"] == "af3f8b2c14d9e701"
+    assert data[0]["name"] == "mambasl-cmapss-hpo"
 
 
 @patch("kfp_workflow.tune.history.get_trial_logs")
@@ -323,7 +247,7 @@ def test_tune_logs_cli(mock_get, mock_is_tune, mock_logs):
         },
     ]
 
-    result = runner.invoke(app, ["tune", "logs", "mambasl-cmapss-hpo"])
+    result = runner.invoke(app, ["tune", "logs", "af3f8b2c14d9e701"])
 
     assert result.exit_code == 0
     assert "trial-1" in result.output
@@ -345,11 +269,11 @@ def test_tune_logs_cli_json(mock_get, mock_is_tune, mock_logs):
         },
     ]
 
-    result = runner.invoke(app, ["--json", "tune", "logs", "mambasl-cmapss-hpo"])
+    result = runner.invoke(app, ["--json", "tune", "logs", "af3f8b2c14d9e701"])
 
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data[0]["trial_name"] == "trial-2"
+    assert data[0]["name"] == "trial-2"
     assert "ValueError" in data[0]["logs"]
 
 
