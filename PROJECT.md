@@ -30,7 +30,8 @@ test/
 ├── pipelines/
 │   └── README.md            # Generated pipeline output landing area
 ├── scripts/
-│   └── build_image.sh       # Helper for container image builds
+│   ├── build_image.sh       # Helper for container image builds
+│   └── load_image_to_cluster.sh # Helper for importing local images into cluster containerd
 ├── src/
 │   └── kfp_workflow/
 │       ├── cli/             # Typer CLI, shared workflow helpers, and output formatting

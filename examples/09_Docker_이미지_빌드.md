@@ -22,13 +22,13 @@ docker build -t kfp-workflow:latest -f docker/Dockerfile .
 
 ## 로컬 클러스터에 적재
 
-예시로 tar 저장:
+이 저장소의 표준 helper:
 
 ```bash
-docker save kfp-workflow:latest -o /tmp/kfp-workflow-latest.tar
+./scripts/load_image_to_cluster.sh kfp-workflow:latest scouter1
 ```
 
-실제 적재 방식은 클러스터 환경에 따라 다릅니다. 이 저장소에서는 helper pod를 통한 containerd import 절차를 사용해 왔으며, 자세한 운영 메모는 루트 [OPERATIONS.md](/home/scouter/proj_2026_1_etri/test/OPERATIONS.md)를 따릅니다.
+내부적으로는 host `/tmp`에 tar를 저장한 뒤, `image-loader` 네임스페이스의 privileged helper pod에서 containerd로 import합니다. 자세한 운영 메모는 루트 [OPERATIONS.md](/home/scouter/proj_2026_1_etri/test/OPERATIONS.md)를 따릅니다.
 
 ## 참고
 

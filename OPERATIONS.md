@@ -254,11 +254,18 @@ Or use the helper script:
 ./scripts/build_image.sh
 ```
 
-Local-cluster import example:
+Import the built image into the containerd-backed Kubernetes node:
 
 ```bash
-docker save kfp-workflow:latest -o /tmp/kfp-workflow-latest.tar
+./scripts/load_image_to_cluster.sh kfp-workflow:latest scouter1
 ```
+
+Behavior:
+
+- The helper saves the image tarball under host `/tmp`.
+- It creates or reuses the privileged `image-loader` namespace.
+- It launches a one-shot importer pod pinned to the requested node and runs `nerdctl ... load` against `/run/containerd/containerd.sock`.
+- The importer pod is deleted automatically on script exit.
 
 If the cluster cannot pull from a registry, use the helper-pod import flow already documented by the project and avoid inventing alternate ad hoc paths.
 

@@ -143,6 +143,7 @@ kfp-workflow pipeline compile \
 - Default namespace in many examples: `kubeflow-user-example-com`
 - Root package requires Python `>=3.10`
 - The unified Docker image is built from [docker/Dockerfile](/home/scouter/proj_2026_1_etri/test/docker/Dockerfile)
+- The supported local-to-cluster image import helper is [load_image_to_cluster.sh](/home/scouter/proj_2026_1_etri/test/scripts/load_image_to_cluster.sh)
 - `cluster bootstrap` creates PVCs for pipeline, benchmark, or tune storage from a spec
 - Tune submissions generate opaque Katib experiment IDs; the logical tune name stays visible as a separate `name` field in JSON output
 

@@ -12,6 +12,11 @@ from typing import Any, Dict, List, Optional
 
 import typer
 
+# Suppress noisy third-party deprecation warnings before importing modules that
+# transitively load google-auth / KFP.
+warnings.filterwarnings("ignore", category=FutureWarning, module=r"google(\..*)?$")
+warnings.filterwarnings("ignore", category=FutureWarning, module=r"kfp(\..*)?$")
+
 from kfp_workflow.cli.workflows import (
     DEFAULT_HOST,
     DEFAULT_NAMESPACE,
@@ -24,10 +29,6 @@ from kfp_workflow.cli.workflows import (
     short_id,
     workflow_summary,
 )
-
-# Suppress noisy third-party deprecation warnings that are not actionable
-warnings.filterwarnings("ignore", category=FutureWarning, module="google")
-warnings.filterwarnings("ignore", category=FutureWarning, module="kfp")
 
 # ---------------------------------------------------------------------------
 # Global state

@@ -1,5 +1,8 @@
 """Tests that CLI command groups and subcommands exist."""
 
+import subprocess
+import sys
+
 from typer.testing import CliRunner
 
 from kfp_workflow.cli.main import app
@@ -10,6 +13,18 @@ runner = CliRunner()
 def test_help_exits_zero():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
+
+
+def test_module_help_suppresses_google_python_eol_futurewarning():
+    result = subprocess.run(
+        [sys.executable, "-m", "kfp_workflow.cli.main", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "FutureWarning" not in result.stderr
+    assert "google-auth" not in result.stderr
 
 
 def test_pipeline_compile_help():
