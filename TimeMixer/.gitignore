@@ -1,9 +1,0 @@
-.DS_store
-.python-version
-*.pth
-result_*.txt
-
-__pycache__/
-dataset/
-results/
-test_results/
